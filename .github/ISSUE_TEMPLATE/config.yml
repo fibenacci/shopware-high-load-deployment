@@ -1,0 +1,15 @@
+blank_issues_enabled: false
+contact_links:
+    - name: Security vulnerability
+      url: https://github.com/EXAMPLE/shopware-shop/security/advisories/new
+      about: |
+        Report security issues privately via GitHub Security Advisories — never via public issues.
+        See SECURITY.md for details.
+    - name: Shopware Core question
+      url: https://developer.shopware.com/docs/
+      about: |
+        Questions about Shopware itself (not this template) go to the Shopware docs / Slack.
+    - name: Discussion / RFC
+      url: https://github.com/EXAMPLE/shopware-shop/discussions
+      about: |
+        Open-ended questions, architecture proposals, "is this a good idea" threads.

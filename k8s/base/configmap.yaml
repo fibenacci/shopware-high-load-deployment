@@ -1,0 +1,69 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+    name: shopware-config
+data:
+    # Non-secret runtime config. Real secrets (DB password, app secret,
+    # composer auth, Tideways API key, OTel auth tokens) live in the Secret
+    # below — populated from your secret-management tool of choice (Vault,
+    # External Secrets, Sealed Secrets, SOPS, ...).
+    APP_ENV: prod
+    APP_DEBUG: "0"
+    SHOPWARE_HTTP_CACHE_ENABLED: "1"
+    SHOPWARE_HTTP_DEFAULT_TTL: "7200"
+    INSTANCE_ID: shopware
+
+    # Search
+    OPENSEARCH_URL: http://opensearch:9200
+    SHOPWARE_ES_ENABLED: "1"
+    SHOPWARE_ES_INDEXING_ENABLED: "1"
+    SHOPWARE_ES_INDEX_PREFIX: sw
+    ADMIN_OPENSEARCH_URL: http://opensearch:9200
+    SHOPWARE_ADMIN_ES_ENABLED: "1"
+    SHOPWARE_ADMIN_ES_INDEX_PREFIX: sw-admin
+
+    # Cache / sessions
+    REDIS_CACHE_HOST: redis
+    REDIS_CACHE_PORT: "6379"
+    REDIS_CACHE_DATABASE: "1"
+    REDIS_SESSION_HOST: redis
+    REDIS_SESSION_PORT: "6379"
+    REDIS_SESSION_DATABASE: "0"
+    LOCK_DSN: "redis://redis:6379"
+
+    # Messenger
+    RABBITMQ_DSN_DEFAULT: amqp://shopware:shopware@rabbitmq:5672/%2f
+    MESSENGER_TRANSPORT_DSN: doctrine://default
+
+    # PHP-FPM tuning (consumed by docker/php/www.conf)
+    PHP_FPM_MAX_CHILDREN: "20"
+    PHP_FPM_START_SERVERS: "4"
+    PHP_FPM_MIN_SPARE: "2"
+    PHP_FPM_MAX_SPARE: "8"
+    PHP_TIMEZONE: Europe/Berlin
+
+    # Observability
+    OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.observability:4317
+    OTEL_SERVICE_NAME: shopware-web
+    PYROSCOPE_SERVER_ADDRESS: http://pyroscope.observability:4040
+
+    # Shopware deployment-helper — read on fresh installs and ignored after.
+    # https://developer.shopware.com/docs/guides/hosting/installation-updates/deployments/deployment-helper.html
+    INSTALL_LOCALE: de-DE
+    INSTALL_CURRENCY: EUR
+    INSTALL_ADMIN_USERNAME: admin
+    SHOPWARE_DEPLOYMENT_TIMEOUT: "600"
+    SHOPWARE_USAGE_DATA_CONSENT: revoked
+
+    # ----------------------------------------------------------------------
+    # Read-replica routing (opt-in).
+    # Shopware's DAL routes SELECT queries against DATABASE_REPLICA_*_URL
+    # when present; writes still go to DATABASE_URL. Disabled here — the
+    # production overlay enables it once the managed DB has replicas
+    # provisioned.
+    #
+    # https://developer.shopware.com/docs/guides/hosting/infrastructure/database.html
+    # ----------------------------------------------------------------------
+    # Uncomment + populate in the overlay:
+    # DATABASE_REPLICA_0_URL: "mysql://reader:***@db-replica-0.internal:3306/shopware"
+    # DATABASE_REPLICA_1_URL: "mysql://reader:***@db-replica-1.internal:3306/shopware"

@@ -1,0 +1,147 @@
+#!/usr/bin/env bash
+# Pre-commit hook — fast local gate before code leaves the laptop.
+#
+# Mirrors the first three CI gates so red feedback arrives in 5 seconds
+# instead of 5 minutes. Skip with `git commit --no-verify` if you really
+# have to (the CI gates will still block).
+#
+# Checks (only on STAGED files unless noted):
+#   1. signed-commit config sanity — fails if signing isn't on
+#   2. trailing whitespace + tab leaks
+#   3. gitleaks — committed-secret scan
+#   4. php-cs-fixer — staged .php files only
+#   5. quick syntax check — staged .php files
+#
+# Install: `make setup-hooks` (points `core.hooksPath` at .githooks/)
+#
+# Bypass: `git commit --no-verify` is a foot-gun — CI still rejects unsigned
+# commits via .github/workflows/verify-signatures.yml.
+
+set -euo pipefail
+
+red()    { printf "\033[1;31m%s\033[0m\n" "$*"; }
+yellow() { printf "\033[1;33m%s\033[0m\n" "$*"; }
+green()  { printf "\033[1;32m%s\033[0m\n" "$*"; }
+
+# Resolve to repo root regardless of where git invokes us from.
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "${REPO_ROOT}"
+
+STAGED="$(git diff --cached --name-only --diff-filter=ACMR)"
+STAGED_PHP="$(printf '%s\n' "${STAGED}" | grep -E '\.php$' || true)"
+
+failed=0
+
+# ---------------------------------------------------------------------------
+# 0. Signed commits — git config sanity.
+#
+# We can't verify the signature here (the commit doesn't exist yet), but we
+# CAN refuse to proceed if signing isn't configured. The actual signature
+# verification happens server-side via .github/workflows/verify-signatures.yml.
+#
+# Two ways to sign: GPG or SSH. We accept either as long as the relevant
+# config is set. See docs/signed-commits.md for the setup.
+# ---------------------------------------------------------------------------
+sign_format="$(git config --get gpg.format || echo openpgp)"
+sign_on="$(git config --get commit.gpgsign || echo false)"
+
+if [ "${sign_on}" != "true" ]; then
+    red "✗ commit signing is not enabled."
+    red "  Quick fix:"
+    red "    git config --global commit.gpgsign true"
+    red "  See docs/signed-commits.md for full GPG / SSH setup."
+    failed=1
+else
+    case "${sign_format}" in
+        ssh)
+            ssh_key="$(git config --get user.signingkey || echo '')"
+            if [ -z "${ssh_key}" ]; then
+                red "✗ gpg.format=ssh but user.signingkey is unset."
+                red "  Fix: git config --global user.signingkey ~/.ssh/id_ed25519.pub"
+                failed=1
+            fi
+            ;;
+        openpgp|gpg)
+            gpg_key="$(git config --get user.signingkey || echo '')"
+            if [ -z "${gpg_key}" ]; then
+                yellow "⚠ user.signingkey is unset — git will guess from user.email."
+                yellow "  Pin it explicitly: git config --global user.signingkey <KEYID>"
+            fi
+            ;;
+        *)
+            red "✗ unsupported gpg.format=${sign_format} (expected ssh or openpgp/gpg)"
+            failed=1
+            ;;
+    esac
+fi
+
+# ---------------------------------------------------------------------------
+# 1. Trailing whitespace + tab leaks
+#
+# Skips *.md files — Markdown uses trailing double-spaces as hard line breaks,
+# and .editorconfig pins `[*.md] trim_trailing_whitespace = false`. Keeping
+# the two consistent avoids spurious blocks on doc edits.
+# ---------------------------------------------------------------------------
+if [ -n "${STAGED}" ]; then
+    bad=$(printf '%s\n' "${STAGED}" | grep -vE '\.md$' | xargs -I{} sh -c '
+        f={}
+        [ -f "$f" ] || exit 0
+        if grep -nIH "[ 	]$" "$f" >/dev/null 2>&1; then
+            echo "$f"
+        fi
+    ' 2>/dev/null || true)
+    if [ -n "${bad}" ]; then
+        red "✗ trailing whitespace in:"
+        printf '%s\n' "${bad}" | sed 's/^/    /'
+        red "  Fix in bulk: sed -i '' 's/[[:space:]]*$//' <file>"
+        failed=1
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# 2. gitleaks — committed-secret scan
+# ---------------------------------------------------------------------------
+if command -v gitleaks >/dev/null 2>&1; then
+    if ! gitleaks protect --staged --redact --no-banner >/dev/null 2>&1; then
+        red "✗ gitleaks flagged a potential secret in staged changes."
+        red "  Run: gitleaks protect --staged --redact --verbose"
+        failed=1
+    fi
+else
+    yellow "⚠ gitleaks not installed — skipping secret scan. Install: brew install gitleaks"
+fi
+
+# ---------------------------------------------------------------------------
+# 3. php-cs-fixer — staged PHP only
+# ---------------------------------------------------------------------------
+if [ -n "${STAGED_PHP}" ] && [ -x vendor/bin/php-cs-fixer ]; then
+    # Run fixer in dry-run on staged files; non-zero = unfixed style issues.
+    if ! printf '%s\n' "${STAGED_PHP}" | xargs vendor/bin/php-cs-fixer fix \
+        --config=.build/php-cs-fixer.php \
+        --allow-risky=yes --dry-run --using-cache=no --quiet 2>/dev/null; then
+        red "✗ php-cs-fixer found unformatted code. Auto-fix with:"
+        red "    make php-cs-fixer"
+        failed=1
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# 4. PHP syntax — `php -l` on staged files
+# ---------------------------------------------------------------------------
+if [ -n "${STAGED_PHP}" ] && command -v php >/dev/null 2>&1; then
+    for f in ${STAGED_PHP}; do
+        [ -f "$f" ] || continue
+        if ! php -l "$f" >/dev/null 2>&1; then
+            red "✗ PHP syntax error in $f:"
+            php -l "$f" 2>&1 | sed 's/^/    /'
+            failed=1
+        fi
+    done
+fi
+
+if [ "${failed}" -ne 0 ]; then
+    red "Pre-commit checks failed. Fix the above or skip with --no-verify."
+    exit 1
+fi
+
+green "✓ pre-commit OK"

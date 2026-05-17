@@ -1,0 +1,65 @@
+# Single-replica StatefulSet — fine for staging / small prod. For real prod,
+# point DATABASE_URL at a managed offering (RDS / CloudSQL / Aurora) and
+# delete this manifest from the overlay.
+
+apiVersion: v1
+kind: Service
+metadata:
+    name: mariadb
+spec:
+    clusterIP: None
+    selector:
+        app.kubernetes.io/component: mariadb
+    ports:
+        - { port: 3306, targetPort: 3306, name: mysql }
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+    name: mariadb
+    labels:
+        app.kubernetes.io/component: mariadb
+spec:
+    serviceName: mariadb
+    replicas: 1
+    selector:
+        matchLabels:
+            app.kubernetes.io/component: mariadb
+    template:
+        metadata:
+            labels:
+                app.kubernetes.io/component: mariadb
+                app.kubernetes.io/part-of: shopware
+        spec:
+            terminationGracePeriodSeconds: 60
+            containers:
+                - name: mariadb
+                  image: mariadb:10.11
+                  args:
+                      - --max_allowed_packet=1073741824
+                      - --innodb_buffer_pool_size=2G
+                      - --innodb_log_file_size=256M
+                  ports:
+                      - { containerPort: 3306, name: mysql }
+                  envFrom:
+                      - secretRef: { name: shopware-secrets }
+                  env:
+                      - name: MYSQL_DATABASE
+                        value: shopware
+                      - name: MYSQL_USER
+                        value: shopware
+                  volumeMounts:
+                      - { name: data, mountPath: /var/lib/mysql }
+                  resources:
+                      requests: { cpu: 500m, memory: 2Gi }
+                      limits:   { cpu: 4,    memory: 8Gi }
+                  readinessProbe:
+                      exec: { command: ["mysqladmin", "ping", "-uroot", "-p$(MYSQL_ROOT_PASSWORD)"] }
+                      initialDelaySeconds: 15
+                      periodSeconds: 10
+    volumeClaimTemplates:
+        - metadata: { name: data }
+          spec:
+              accessModes: ["ReadWriteOnce"]
+              resources: { requests: { storage: 50Gi } }

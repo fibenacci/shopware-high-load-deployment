@@ -1,0 +1,97 @@
+# Project-wide Shopware config. The platform ships a sane default under
+# vendor/shopware/core/Framework/Resources/config/packages/shopware.yaml;
+# this file overrides only what we tighten or expose to env vars.
+
+shopware:
+    # -----------------------------------------------------------------------
+    # Application-layer rate limiting (Shopware 6.4.6.0+).
+    #
+    # Complements the ingress-nginx rate limits configured in
+    # k8s/base/ingress.yaml. The ingress catches obvious bursts cheaply per
+    # IP; this layer catches slow brute-force and per-account abuse the
+    # ingress can't see.
+    #
+    # Defaults below mirror Shopware's recommended settings. Tighten only
+    # after seeing real abuse — too-tight thresholds break legitimate users.
+    #
+    # https://developer.shopware.com/docs/guides/hosting/infrastructure/rate-limiter.html
+    # -----------------------------------------------------------------------
+    api:
+        rate_limiter:
+            # Storefront + Store API customer login.
+            login:
+                enabled: true
+                policy: 'time_backoff'
+                reset: '24 hours'
+                limits:
+                    - { limit: 3,  interval: '10 seconds' }
+                    - { limit: 5,  interval: '60 seconds' }
+                    - { limit: 10, interval: '3600 seconds' }
+
+            # Guest order-track / status-check after checkout.
+            guest_login:
+                enabled: true
+                policy: 'time_backoff'
+                reset: '24 hours'
+                limits:
+                    - { limit: 3,  interval: '10 seconds' }
+                    - { limit: 10, interval: '60 seconds' }
+
+            # OAuth — Admin login + integration tokens.
+            oauth:
+                enabled: true
+                policy: 'time_backoff'
+                reset: '24 hours'
+                limits:
+                    - { limit: 3,  interval: '10 seconds' }
+                    - { limit: 5,  interval: '60 seconds' }
+                    - { limit: 10, interval: '3600 seconds' }
+
+            # Customer password recovery (storefront).
+            reset_password:
+                enabled: true
+                policy: 'time_backoff'
+                reset: '24 hours'
+                limits:
+                    - { limit: 3, interval: '60 seconds' }
+                    - { limit: 5, interval: '3600 seconds' }
+
+            # Admin user password recovery.
+            user_recovery:
+                enabled: true
+                policy: 'time_backoff'
+                reset: '24 hours'
+                limits:
+                    - { limit: 3, interval: '60 seconds' }
+                    - { limit: 5, interval: '3600 seconds' }
+
+            # Public contact form — first line against spam bots.
+            contact_form:
+                enabled: true
+                policy: 'time_backoff'
+                reset: '24 hours'
+                limits:
+                    - { limit: 3, interval: '60 seconds' }
+                    - { limit: 5, interval: '3600 seconds' }
+
+    # -----------------------------------------------------------------------
+    # HTTP cache — works with both Varnish (production) and Symfony HttpCache
+    # (single-replica/staging fallback). See docs/caching.md.
+    #
+    # The default-TTL is controlled by the env var SHOPWARE_HTTP_DEFAULT_TTL
+    # directly; Shopware 6.6 doesn't have a YAML key for it (the available
+    # http_cache keys are `ignored_url_parameters`, `reverse_proxy`,
+    # `stale_if_error`, `stale_while_revalidate`).
+    # -----------------------------------------------------------------------
+    http_cache:
+        stale_while_revalidate: 30
+        stale_if_error: 60
+
+    # -----------------------------------------------------------------------
+    # Usage data consent (Shopware telemetry).
+    # `revoked` matches the SHOPWARE_USAGE_DATA_CONSENT env var in the
+    # ConfigMap — be explicit so an admin can't silently flip it back on.
+    # -----------------------------------------------------------------------
+    usage_data:
+        gateway:
+            batch_size: 1000

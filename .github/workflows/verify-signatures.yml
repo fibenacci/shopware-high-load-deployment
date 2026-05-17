@@ -1,0 +1,88 @@
+name: Verify commit signatures
+
+# Server-side enforcement of the signed-commit policy. Runs on every PR
+# and verifies that EVERY commit in the PR is signed and the signature
+# is valid (= the signer's key is registered with their GitHub account).
+#
+# This is the real gate — the local pre-commit hook can be bypassed with
+# `--no-verify`, but unsigned commits never land on main because this
+# job is required by branch protection.
+#
+# Branch protection setup (one-time, GitHub UI):
+#   Settings → Branches → main → Branch protection rule
+#     ☑ Require a pull request before merging
+#     ☑ Require signed commits
+#     ☑ Require status checks to pass → "Verify commit signatures"
+#
+# Reference:
+#   https://docs.github.com/authentication/managing-commit-signature-verification
+
+on:
+    pull_request:
+    push:
+        branches: [main]
+
+permissions:
+    contents: read
+    pull-requests: read
+
+jobs:
+    verify:
+        name: Verify commit signatures
+        runs-on: ubuntu-latest
+        timeout-minutes: 5
+        steps:
+            -   uses: actions/checkout@v4
+                with:
+                    # We need the full PR commit range, not just the merge commit.
+                    fetch-depth: 0
+
+            -   name: Verify every commit in the PR
+                uses: actions/github-script@v7
+                with:
+                    github-token: ${{ secrets.GITHUB_TOKEN }}
+                    script: |
+                        const { owner, repo } = context.repo;
+                        let commits;
+                        if (context.eventName === 'pull_request') {
+                            const pr = context.payload.pull_request.number;
+                            const { data } = await github.rest.pulls.listCommits({
+                                owner, repo, pull_number: pr, per_page: 250,
+                            });
+                            commits = data;
+                        } else {
+                            // Push to main — verify the head commit; everything
+                            // older has already been gated through this job
+                            // (or merged from a PR that was).
+                            const { data } = await github.rest.repos.getCommit({
+                                owner, repo, ref: context.sha,
+                            });
+                            commits = [data];
+                        }
+
+                        const bad = [];
+                        for (const c of commits) {
+                            const v = c.commit.verification;
+                            if (!v || !v.verified) {
+                                bad.push({
+                                    sha: c.sha.substring(0, 7),
+                                    subject: c.commit.message.split('\n')[0],
+                                    reason: v ? v.reason : 'no verification block',
+                                });
+                            }
+                        }
+
+                        if (bad.length === 0) {
+                            core.notice(`✓ All ${commits.length} commit(s) signed + verified.`);
+                            return;
+                        }
+
+                        const lines = bad.map(b =>
+                            `  ✗ ${b.sha} — ${b.reason}: ${b.subject}`
+                        );
+                        core.setFailed(
+                            `Unsigned or unverified commits (${bad.length}):\n` +
+                            lines.join('\n') +
+                            '\n\nFix: sign your commits and force-push the PR branch.\n' +
+                            'Setup: docs/signed-commits.md'
+                        );

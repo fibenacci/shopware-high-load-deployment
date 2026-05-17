@@ -1,0 +1,40 @@
+# CI stack — single container built from .github/ci/Dockerfile.
+#
+# The image bakes everything (composer install + plugin:install + theme:compile
+# + CI overrides) at build time, so the running container has nothing to set
+# up beyond starting MariaDB / php-fpm / nginx.
+#
+# No bind mounts: the image IS the project state. Docker's layer cache makes
+# iteration cheap whenever inputs haven't changed.
+
+services:
+    shopware:
+        build:
+            context: ../..
+            dockerfile: .github/ci/Dockerfile
+            args:
+                COMPOSER_AUTH: ${COMPOSER_AUTH:-}
+        image: shopware-ci:latest
+        container_name: shopware-ci
+        ports:
+            - '127.0.0.1:${STOREFRONT_PORT:-8080}:80'
+        environment:
+            - XDEBUG_ENABLED=0
+            - SHOPWARE_ES_ENABLED=0
+            - SHOPWARE_ES_INDEXING_ENABLED=0
+            - SHOPWARE_ADMIN_ES_ENABLED=0
+            - SHOPWARE_ES_THROW_EXCEPTION=0
+            - REDIS_CACHE_HOST=127.0.0.1
+            - REDIS_CACHE_PORT=6379
+            - REDIS_CACHE_PASSWORD=
+            - REDIS_CACHE_DATABASE=0
+            - REDIS_SESSION_HOST=127.0.0.1
+            - REDIS_SESSION_PORT=6379
+            - REDIS_SESSION_PASSWORD=
+            - REDIS_SESSION_DATABASE=1
+        healthcheck:
+            test: ['CMD-SHELL', 'curl -sf http://localhost/ >/dev/null']
+            interval: 5s
+            timeout: 5s
+            retries: 24
+            start_period: 20s

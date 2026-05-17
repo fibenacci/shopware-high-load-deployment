@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+    name: shopware-web
+spec:
+    replicas: 1
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+    name: shopware-worker
+spec:
+    replicas: 1
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+    name: shopware-web
+spec:
+    minReplicas: 1
+    maxReplicas: 3

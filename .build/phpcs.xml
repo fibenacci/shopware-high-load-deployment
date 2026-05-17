@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<ruleset name="Shopware-Shop">
+    <description>PHPCS ruleset — light-touch checks that are not covered by PHP-CS-Fixer.</description>
+
+    <rule ref="PSR12"/>
+    <rule ref="Generic.Files.LineLength">
+        <properties>
+            <property name="lineLimit" value="160"/>
+            <property name="absoluteLineLimit" value="200"/>
+        </properties>
+    </rule>
+    <rule ref="Squiz.Strings.DoubleQuoteUsage"/>
+
+    <!-- Symfony / Shopware load Resources/* by convention; don't lint generated assets. -->
+    <exclude-pattern>*/Resources/*</exclude-pattern>
+    <exclude-pattern>*/Migration/*</exclude-pattern>
+    <exclude-pattern>*/vendor/*</exclude-pattern>
+    <exclude-pattern>*/node_modules/*</exclude-pattern>
+</ruleset>

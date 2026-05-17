@@ -1,0 +1,85 @@
+# kube-prometheus-stack — defaults tuned for a small-to-medium Shopware cluster.
+# https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack
+
+fullnameOverride: kube-prometheus-stack
+
+prometheus:
+    prometheusSpec:
+        retention: 15d
+        retentionSize: 40GB
+        scrapeInterval: 15s
+        # Auto-discover any ServiceMonitor / PodMonitor / PrometheusRule in any
+        # namespace that carries our release label.
+        serviceMonitorSelectorNilUsesHelmValues: false
+        podMonitorSelectorNilUsesHelmValues: false
+        ruleSelectorNilUsesHelmValues: false
+        enableRemoteWriteReceiver: true
+        enableFeatures: [native-histograms]
+        storageSpec:
+            volumeClaimTemplate:
+                spec:
+                    accessModes: ["ReadWriteOnce"]
+                    resources: { requests: { storage: 50Gi } }
+        resources:
+            requests: { cpu: 500m, memory: 1Gi }
+            limits:   { cpu: 2,    memory: 4Gi }
+
+alertmanager:
+    alertmanagerSpec:
+        storage:
+            volumeClaimTemplate:
+                spec:
+                    accessModes: ["ReadWriteOnce"]
+                    resources: { requests: { storage: 5Gi } }
+    config:
+        route:
+            receiver: "default"
+            group_by: ["alertname", "namespace", "severity"]
+            group_wait: 30s
+            group_interval: 5m
+            repeat_interval: 3h
+            routes:
+                - matchers: [severity = "critical"]
+                  receiver: "default"
+                  continue: true
+        receivers:
+            - name: "default"
+              # Wire up your Slack / PagerDuty / Opsgenie credentials here.
+              webhook_configs: []
+
+grafana:
+    adminPassword: CHANGEME
+    defaultDashboardsEnabled: true
+    sidecar:
+        dashboards: { enabled: true, label: grafana_dashboard, searchNamespace: ALL }
+        datasources: { enabled: true, label: grafana_datasource, searchNamespace: ALL }
+    additionalDataSources:
+        - name: Loki
+          type: loki
+          uid: loki
+          url: http://loki.observability:3100
+        - name: Tempo
+          type: tempo
+          uid: tempo
+          url: http://tempo.observability:3200
+        - name: Pyroscope
+          type: grafana-pyroscope-datasource
+          uid: pyroscope
+          url: http://pyroscope.observability:4040
+    plugins:
+        - grafana-pyroscope-app
+    persistence:
+        enabled: true
+        size: 10Gi
+
+# Disable some scrapes that don't apply to managed-control-plane clusters
+# (GKE, EKS, AKS). Re-enable on bare metal / k3s where you own the control plane.
+kubeControllerManager: { enabled: true }
+kubeScheduler: { enabled: true }
+kubeProxy: { enabled: true }
+kubeEtcd: { enabled: false }
+
+prometheus-node-exporter:
+    enabled: true
+kube-state-metrics:
+    enabled: true

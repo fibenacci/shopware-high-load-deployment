@@ -1,0 +1,8 @@
+{
+    "github-oauth": {
+        "github.com": "REPLACE_WITH_GITHUB_TOKEN"
+    },
+    "bearer": {
+        "packages.shopware.com": "REPLACE_WITH_SHOPWARE_STORE_TOKEN"
+    }
+}

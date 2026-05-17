@@ -1,0 +1,160 @@
+# Weekly restore drill — proves the backups produced by shopware-db-backup
+# actually decrypt + load into a real MariaDB. The single most-skipped
+# piece of disaster-recovery hygiene: backups that have never been
+# successfully restored aren't backups, they're hope.
+#
+# Flow:
+#   1. Pick the most recent successful backup from S3.
+#   2. Spin up an ephemeral MariaDB pod (PVC, deleted after).
+#   3. Decrypt + restore the dump.
+#   4. Sanity-check the restored DB:
+#        - table count > expected floor
+#        - critical tables non-empty (product, sales_channel, user)
+#        - latest migration row exists
+#   5. Report via a Kubernetes Event so kube-state-metrics surfaces it
+#      in Grafana, and Alertmanager pages on consecutive failures.
+#
+# Disabled by default; enable in the production overlay once the backup
+# CronJob has produced its first backup. Belongs in production overlay,
+# not in staging (staging backups are less critical, and the drill burns
+# real cluster resources).
+
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+    name: shopware-restore-drill
+    labels:
+        app.kubernetes.io/name: shopware
+        app.kubernetes.io/component: restore-drill
+spec:
+    # Sunday 04:00 UTC — after the daily backup at 03:17, before Monday traffic.
+    schedule: "0 4 * * 0"
+    concurrencyPolicy: Forbid
+    successfulJobsHistoryLimit: 4
+    failedJobsHistoryLimit: 8
+    jobTemplate:
+        spec:
+            backoffLimit: 0
+            activeDeadlineSeconds: 3600
+            ttlSecondsAfterFinished: 604800   # keep last week's drill for inspection
+            template:
+                spec:
+                    restartPolicy: Never
+                    serviceAccountName: shopware-restore-drill
+                    initContainers:
+                        # Pull the latest backup object key from the bucket.
+                        - name: pick-backup
+                          image: ghcr.io/EXAMPLE/shopware-backup:latest
+                          envFrom:
+                              - secretRef: { name: shopware-backup-secrets }
+                              - configMapRef: { name: shopware-config }
+                          command:
+                              - /bin/sh
+                              - -c
+                              - |
+                                set -euo pipefail
+                                prefix="s3://${BACKUP_BUCKET}/${INSTANCE_ID}/"
+                                latest=$(aws s3 ls "${prefix}" \
+                                    ${BACKUP_ENDPOINT:+--endpoint-url=$BACKUP_ENDPOINT} \
+                                    | sort -k1,2 | tail -1 | awk '{print $4}')
+                                if [ -z "${latest}" ]; then
+                                    echo "::error::no backups found under ${prefix}"
+                                    exit 1
+                                fi
+                                echo "▶ latest backup: ${latest}"
+                                aws s3 cp "${prefix}${latest}" /shared/backup.enc \
+                                    ${BACKUP_ENDPOINT:+--endpoint-url=$BACKUP_ENDPOINT}
+                                echo "${latest}" > /shared/backup-name.txt
+                          volumeMounts:
+                              - { name: shared, mountPath: /shared }
+
+                        # Throwaway MariaDB lifecycle is short — just start
+                        # mariadbd as a sidecar that the next container waits
+                        # on. (Real K8s sidecar-init pattern.)
+                        - name: mariadb
+                          image: mariadb:10.11
+                          restartPolicy: Always
+                          env:
+                              - { name: MYSQL_ROOT_PASSWORD, value: drill }
+                              - { name: MYSQL_DATABASE,      value: restore_check }
+                          args:
+                              - --max_allowed_packet=1073741824
+                          ports: [{ containerPort: 3306 }]
+                          volumeMounts:
+                              - { name: mariadb-data, mountPath: /var/lib/mysql }
+
+                    containers:
+                        - name: drill
+                          image: ghcr.io/EXAMPLE/shopware-backup:latest
+                          envFrom:
+                              - secretRef: { name: shopware-backup-secrets }
+                              - configMapRef: { name: shopware-config }
+                          command:
+                              - /bin/sh
+                              - -c
+                              - |
+                                set -euo pipefail
+                                # Wait for the throwaway MariaDB to come up.
+                                for i in $(seq 1 60); do
+                                    mariadb -h 127.0.0.1 -uroot -pdrill -e 'SELECT 1' >/dev/null 2>&1 && break
+                                    sleep 1
+                                done
+
+                                backup_name=$(cat /shared/backup-name.txt)
+                                echo "▶ Restoring: ${backup_name}"
+
+                                openssl enc -aes-256-cbc -d -pbkdf2 -salt \
+                                    -pass "env:BACKUP_PASSPHRASE" \
+                                    -in /shared/backup.enc \
+                                | gunzip \
+                                | mariadb -h 127.0.0.1 -uroot -pdrill restore_check
+
+                                echo "▶ Sanity checks"
+                                check() {
+                                    label="$1"; sql="$2"; min="$3"
+                                    val=$(mariadb -h 127.0.0.1 -uroot -pdrill restore_check -N -B -e "$sql")
+                                    if [ "${val:-0}" -lt "$min" ]; then
+                                        echo "::error::${label}: got ${val}, want >=${min}"
+                                        return 1
+                                    fi
+                                    echo "  ✓ ${label}: ${val} (>=${min})"
+                                }
+
+                                fail=0
+                                check "table count" \
+                                    "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='restore_check'" 200 \
+                                    || fail=1
+                                check "product rows" \
+                                    "SELECT COUNT(*) FROM product" 1 \
+                                    || fail=1
+                                check "sales_channel rows" \
+                                    "SELECT COUNT(*) FROM sales_channel" 1 \
+                                    || fail=1
+                                check "user rows" \
+                                    "SELECT COUNT(*) FROM user" 1 \
+                                    || fail=1
+                                check "migration_history rows" \
+                                    "SELECT COUNT(*) FROM migration" 50 \
+                                    || fail=1
+
+                                if [ $fail -ne 0 ]; then
+                                    echo "::error::Restore-drill FAILED for ${backup_name}"
+                                    exit 1
+                                fi
+
+                                echo "✅ Restore drill OK for ${backup_name}"
+                          volumeMounts:
+                              - { name: shared,        mountPath: /shared }
+                          resources:
+                              requests: { cpu: 200m, memory: 512Mi }
+                              limits:   { cpu: 1,    memory: 2Gi }
+
+                    volumes:
+                        - { name: shared,        emptyDir: { sizeLimit: 5Gi } }
+                        - { name: mariadb-data,  emptyDir: { sizeLimit: 20Gi } }
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+    name: shopware-restore-drill

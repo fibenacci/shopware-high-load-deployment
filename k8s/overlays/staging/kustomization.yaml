@@ -1,0 +1,36 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: shopware-staging
+
+namePrefix: ""
+commonAnnotations:
+    deployment.kubernetes.io/environment: staging
+
+resources:
+    - ../../base
+
+# Stage-specific patches.
+patches:
+    - path: patch-namespace.yaml
+    - path: patch-replicas.yaml
+    - path: patch-ingress.yaml
+
+# Override image tags. CI rewrites these via `kustomize edit set image`.
+images:
+    - { name: ghcr.io/EXAMPLE/shopware,        newTag: staging }
+    - { name: ghcr.io/EXAMPLE/shopware-worker, newTag: staging }
+
+configMapGenerator:
+    - name: shopware-config
+      behavior: merge
+      literals:
+          # APP_ENV=staging loads config/packages/staging.yaml automatically.
+          # That file disables mailing, shows the banner, and rewrites
+          # sales-channel URLs after `system:setup:staging` runs (handled by
+          # the `staging-setup` one-time task in .shopware-project.yml).
+          - APP_ENV=staging
+          - APP_DEBUG=0
+          - INSTANCE_ID=shopware-staging
+          - SHOPWARE_HTTP_CACHE_ENABLED=1
+          - SHOPWARE_HTTP_DEFAULT_TTL=300

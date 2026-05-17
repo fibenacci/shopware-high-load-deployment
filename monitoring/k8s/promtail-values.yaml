@@ -1,0 +1,21 @@
+config:
+    clients:
+        - url: http://loki.observability:3100/loki/api/v1/push
+    snippets:
+        pipelineStages:
+            - cri: {}
+            - match:
+                  selector: '{app_kubernetes_io_name=~"shopware|shopware-worker"}'
+                  stages:
+                      - json:
+                            expressions:
+                                level: level
+                                msg:   message
+                                trace_id: trace_id
+                      - labels:
+                            level:
+                            trace_id:
+
+serviceMonitor:
+    enabled: true
+    labels: { release: kube-prometheus-stack }

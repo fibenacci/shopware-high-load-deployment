@@ -1,0 +1,2 @@
+# Place plugins maintained inside this repo here (path repositories in
+# composer.json). Vendor / store plugins go in ../plugins/ instead.

@@ -1,0 +1,124 @@
+# Shopware Deployment Helper config — the canonical post-upload pipeline.
+#
+# Run by:
+#   vendor/bin/shopware-deployment-helper run
+#
+# Used by:
+#   • docker/scripts/entrypoint.sh (k8s `migrate` role)
+#   • deploy.php                   (bare-metal Deployer recipe)
+#   • CI deploy jobs               (shopware/github-actions/project-deployer)
+#
+# Reference: https://developer.shopware.com/docs/guides/hosting/installation-updates/deployments/deployment-helper.html
+
+deployment:
+    # --- Hooks ---------------------------------------------------------------
+    # Custom shell snippets that fire around the helper's built-in phases.
+    # Use these for project-specific work the helper doesn't know about
+    # (e.g. warming a custom cache, calling out to a third-party API).
+    hooks:
+        pre: |
+            echo "▶ Shopware deployment-helper starting"
+        post: |
+            bin/console cache:warmup --no-interaction
+            echo "✓ Shopware deployment-helper finished"
+        pre-install: |
+            echo "▶ Fresh install — running pre-install hook"
+        post-install: |
+            echo "✓ Post-install hook"
+        pre-update: |
+            echo "▶ Update detected — running pre-update hook"
+        post-update: |
+            echo "✓ Post-update hook"
+
+    # --- Extension management -----------------------------------------------
+    # Helper installs / activates / updates every plugin found under
+    # custom/plugins, custom/apps, and composer. Override per-plugin state
+    # below.
+    extension-management:
+        enabled: true
+        exclude: []
+            # - NewsletterSendinblue
+        force-update: []
+        overrides: {}
+            # MyPlugin:
+            #   state: inactive
+            #   keepUserData: true
+
+    # --- One-time tasks -----------------------------------------------------
+    # Idempotent scripts the helper runs exactly once per `id`. State is
+    # tracked in the database, so re-runs are no-ops. Use for data fixes
+    # that aren't expressed as DAL migrations.
+    one-time-tasks:
+        # Activate Shopware's built-in staging mode once per environment.
+        # The script no-ops on non-staging envs and is idempotent within
+        # staging (system:setup:staging itself uses an internal flag).
+        - id: setup-staging-mode
+          when: after
+          script: |
+              if [ "${APP_ENV}" = "staging" ]; then
+                  bin/console system:setup:staging --no-interaction
+              fi
+
+        # Example slot for project-specific data fixes:
+        # - id: 2026-05-fix-currency-rounding
+        #   when: after
+        #   script: |
+        #     bin/console ugg:data:fix-currency-rounding --no-interaction
+
+    # --- Store credentials --------------------------------------------------
+    # Populated via env vars (see deployment.config + your secret store):
+    #   SHOPWARE_STORE_ACCOUNT_EMAIL
+    #   SHOPWARE_STORE_ACCOUNT_PASSWORD
+    #   SHOPWARE_STORE_LICENSE_DOMAIN
+    store:
+        license-domain: '${SHOPWARE_STORE_LICENSE_DOMAIN}'
+
+# =============================================================================
+# Dump configuration — consumed by `shopware-cli project dump`.
+#
+# Connection details (SSH + DB credentials) DO NOT live here — they live in
+# .fetch-dump.local.env (gitignored) and are passed to shopware-cli through
+# an ad-hoc SSH tunnel by docker/scripts/fetch-dump.sh.
+#
+# This file controls what ENDS UP IN THE DUMP — anonymisation rules, what
+# tables to leave behind, what to subset. Committed because the rules are
+# project-wide and should be reviewable.
+#
+# Reference:
+#   https://developer.shopware.com/docs/products/cli/project-commands/mysql-dump.html
+# =============================================================================
+dump:
+    # Custom anonymisation. `--anonymize` already covers the built-in tables
+    # (customer, customer_address, order_customer, user, etc.); extend or
+    # override per-column here when you ship custom entities with PII.
+    #
+    # Values are evaluated as MySQL expressions or `faker.*` helpers.
+    rewrite:
+        # Examples — uncomment per project:
+        # newsletter_recipient:
+        #     email:      "faker.Internet().Email()"
+        #     first_name: "faker.Name().FirstName()"
+        #     last_name:  "faker.Name().LastName()"
+        # ugg_loyalty_member:
+        #     phone:      "'+49000000000'"
+        #     birthday:   "'1970-01-01'"
+        {}
+
+    # Schema-only tables — keep structure, drop rows. `--clean` already
+    # truncates cart / log_entry / messenger_messages / version*. Add
+    # project tables that contain transient or auto-regenerated state.
+    nodata: []
+        # - ugg_loyalty_event_log
+        # - ugg_recommender_cache
+
+    # Tables to skip entirely — neither schema nor rows. Use for
+    # third-party plugin tables that would explode the dump (e.g. analytics
+    # event firehoses).
+    ignore: []
+        # - swag_analytics_event
+
+    # Subset filters — keep only a WHERE-matching slice of large tables
+    # so local dumps stay manageable.
+    where: {}
+        # order: 'order_date > DATE_SUB(NOW(), INTERVAL 90 DAY)'
+        # order_transaction: 'created_at > DATE_SUB(NOW(), INTERVAL 90 DAY)'

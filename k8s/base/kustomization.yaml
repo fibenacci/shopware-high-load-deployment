@@ -1,0 +1,53 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Base manifests — shared across every environment. Overlays patch image
+# tags, resource budgets, replica counts, hostnames, and ingress class.
+
+namespace: shopware
+
+commonLabels:
+    app.kubernetes.io/part-of: shopware
+    app.kubernetes.io/managed-by: kustomize
+
+resources:
+    - namespace.yaml
+    - configmap.yaml
+    - secret.yaml
+    - service-web.yaml
+    - deployment-web.yaml
+    - deployment-worker.yaml
+    - cronjob.yaml
+    - hpa-web.yaml
+    - pdb-web.yaml
+    - ingress.yaml
+    - networkpolicy.yaml
+    - servicemonitor.yaml
+    # Varnish edge cache — defined here, but the Ingress in base points at
+    # shopware-web by default. Overlays patch the Ingress backend to
+    # `shopware-varnish` to enable the edge cache (prod) or leave it
+    # bypassed (staging, for debugging).
+    - deployment-varnish.yaml
+    # Daily DB backup → S3 (encrypted, retention via bucket lifecycle).
+    # Disabled by default; populate shopware-backup-secrets in your secret
+    # manager before adopting.
+    - cronjob-backup.yaml
+    # Weekly restore drill — proves backups actually restore. The single
+    # most-skipped DR hygiene step.
+    - cronjob-restore-drill.yaml
+    # Stateful services. Swap these for managed offerings (RDS / ElastiCache /
+    # AmazonMQ / OpenSearch Service) in overlays if you prefer.
+    - mariadb.yaml
+    - redis.yaml
+    - rabbitmq.yaml
+    - opensearch.yaml
+
+images:
+    - name: ghcr.io/EXAMPLE/shopware
+      newTag: latest
+    - name: ghcr.io/EXAMPLE/shopware-worker
+      newTag: latest
+    - name: ghcr.io/EXAMPLE/shopware-varnish
+      newTag: latest
+    - name: ghcr.io/EXAMPLE/shopware-backup
+      newTag: latest

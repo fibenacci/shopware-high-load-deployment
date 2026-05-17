@@ -1,0 +1,111 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+    name: shopware-web
+    labels:
+        app.kubernetes.io/name: shopware
+        app.kubernetes.io/component: web
+spec:
+    replicas: 2
+    revisionHistoryLimit: 5
+    strategy:
+        type: RollingUpdate
+        rollingUpdate:
+            maxSurge: 1
+            maxUnavailable: 0
+    selector:
+        matchLabels:
+            app.kubernetes.io/name: shopware
+            app.kubernetes.io/component: web
+    template:
+        metadata:
+            labels:
+                app.kubernetes.io/name: shopware
+                app.kubernetes.io/component: web
+            annotations:
+                # Cycle pods on ConfigMap / Secret change. checksum/* triggers
+                # a rolling restart even when the image tag is unchanged.
+                checksum/config: "{{REPLACE_BY_OVERLAY_OR_CI}}"
+                prometheus.io/scrape: "true"
+                prometheus.io/port: "9253"
+                prometheus.io/path: /metrics
+        spec:
+            terminationGracePeriodSeconds: 60
+            securityContext:
+                runAsNonRoot: true
+                fsGroup: 33
+            containers:
+                - name: shopware
+                  image: ghcr.io/EXAMPLE/shopware:latest
+                  imagePullPolicy: IfNotPresent
+                  args: ["web"]
+                  ports:
+                      # FrankenPHP listens on 8000 by default in the Shopware
+                      # base image. Override via deployment.config if you build
+                      # the fpm variant (which exposes 8080 behind nginx).
+                      - { containerPort: 8000, name: http }
+                  envFrom:
+                      - configMapRef: { name: shopware-config }
+                      - secretRef:    { name: shopware-secrets }
+                  env:
+                      - name: POD_IP
+                        valueFrom: { fieldRef: { fieldPath: status.podIP } }
+                  resources:
+                      requests: { cpu: 250m, memory: 512Mi }
+                      limits:   { cpu: 1500m, memory: 1Gi }
+                  readinessProbe:
+                      httpGet: { path: /health, port: http }
+                      initialDelaySeconds: 10
+                      periodSeconds: 5
+                      timeoutSeconds: 3
+                      failureThreshold: 3
+                  livenessProbe:
+                      httpGet: { path: /health, port: http }
+                      initialDelaySeconds: 30
+                      periodSeconds: 15
+                      timeoutSeconds: 5
+                      failureThreshold: 6
+                  startupProbe:
+                      httpGet: { path: /health, port: http }
+                      initialDelaySeconds: 10
+                      periodSeconds: 5
+                      failureThreshold: 60
+                  lifecycle:
+                      # Give nginx + php-fpm time to drain in-flight requests
+                      # before the kubelet sends SIGTERM.
+                      preStop:
+                          exec: { command: ["sh", "-c", "sleep 5 && nginx -s quit"] }
+                  volumeMounts:
+                      - { name: var-tmp,    mountPath: /tmp }
+                      - { name: var-cache,  mountPath: /var/www/html/var/cache }
+                      - { name: var-log,    mountPath: /var/www/html/var/log }
+                      - { name: media,      mountPath: /var/www/html/public/media }
+                      - { name: thumbnail,  mountPath: /var/www/html/public/thumbnail }
+                  securityContext:
+                      runAsUser: 33
+                      runAsGroup: 33
+                      allowPrivilegeEscalation: false
+                      readOnlyRootFilesystem: false
+                      capabilities: { drop: ["ALL"] }
+
+                # Prometheus exporter sidecar — scrapes the in-pod fpm-status
+                # endpoint exposed in docker/nginx/shopware.conf.
+                - name: php-fpm-exporter
+                  image: hipages/php-fpm_exporter:2
+                  args:
+                      - --phpfpm.scrape-uri=tcp://127.0.0.1:9000/fpm-status
+                  ports:
+                      - { containerPort: 9253, name: metrics }
+                  resources:
+                      requests: { cpu: 10m, memory: 32Mi }
+                      limits:   { cpu: 100m, memory: 64Mi }
+
+            volumes:
+                - { name: var-tmp,   emptyDir: {} }
+                - { name: var-cache, emptyDir: {} }
+                - { name: var-log,   emptyDir: {} }
+                # Shared media — replace with a ReadWriteMany PVC backed by
+                # NFS / EFS / Longhorn / Ceph in real environments. emptyDir
+                # works only for single-replica dev clusters.
+                - { name: media,     emptyDir: {} }
+                - { name: thumbnail, emptyDir: {} }

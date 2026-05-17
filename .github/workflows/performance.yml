@@ -1,0 +1,116 @@
+name: Performance regression gate
+
+# Runs the `regression` k6 profile against the CI-baked Shopware image.
+# Blocking gate on PRs that touch perf-relevant paths, nightly on main as
+# a drift detector.
+#
+# We intentionally use the same pre-baked CI image the test job uses — no
+# extra build cost, deterministic perf profile run-over-run.
+
+on:
+    pull_request:
+        paths:
+            - 'composer.lock'
+            - 'config/**'
+            - 'custom/**'
+            - 'src/**'
+            - 'docker/**'
+            - '.shopware-project.yml'
+            - 'k3s/stresstest/**'
+            - '.github/workflows/performance.yml'
+    schedule:
+        - cron: '17 3 * * *'   # nightly drift watch
+    workflow_dispatch:
+        inputs:
+            profile:
+                description: k6 profile (regression | baseline | spike | endurance)
+                required: false
+                default: regression
+                type: choice
+                options: [regression, baseline, spike, endurance]
+
+concurrency:
+    group: performance-${{ github.ref }}
+    cancel-in-progress: true
+
+jobs:
+    perf:
+        name: k6 ${{ github.event.inputs.profile || 'regression' }}
+        runs-on: ubuntu-latest
+        timeout-minutes: 30
+        env:
+            COMPOSE_PROJECT_NAME: shopware-perf
+            STOREFRONT_PORT: '8080'
+            K6_PROFILE: ${{ github.event.inputs.profile || 'regression' }}
+        steps:
+            -   uses: actions/checkout@v4
+
+            -   name: Bootstrap CI stack (pre-baked image)
+                env:
+                    COMPOSER_AUTH: '{"github-oauth":{"github.com":"${{ secrets.COMPOSER_AUTH_TOKEN }}"},"bearer":{"packages.shopware.com":"${{ secrets.SHOPWARE_PACKAGES_TOKEN }}"}}'
+                run: make ci-bootstrap
+
+            -   name: Warm caches
+                # The first request after a fresh boot hydrates the kernel /
+                # OPcache. Doing this OUT of the measurement window keeps
+                # the perf numbers honest.
+                run: |
+                    for _ in $(seq 1 30); do
+                        curl -sf http://localhost:8080/ >/dev/null || true
+                    done
+
+            -   name: Install k6
+                run: |
+                    curl -fsSL https://dl.k6.io/key.gpg | sudo gpg --dearmor -o /usr/share/keyrings/k6-archive-keyring.gpg
+                    echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" \
+                        | sudo tee /etc/apt/sources.list.d/k6.list
+                    sudo apt-get update
+                    sudo apt-get install -y k6
+
+            -   name: Run k6 (profile=${{ env.K6_PROFILE }})
+                env:
+                    BASE_URL: http://localhost:8080
+                    K6_OUT: json=k6-result.json
+                run: |
+                    k6 run \
+                        --summary-export=k6-summary.json \
+                        --tag testid=${{ env.K6_PROFILE }} \
+                        --tag sha=${{ github.sha }} \
+                        k3s/stresstest/k6/loadtest.js
+
+            -   name: Upload k6 artefacts
+                if: always()
+                uses: actions/upload-artifact@v4
+                with:
+                    name: k6-${{ env.K6_PROFILE }}-${{ github.sha }}
+                    path: |
+                        k6-summary.json
+                        k6-result.json
+                    if-no-files-found: ignore
+
+            -   name: Render summary into job log
+                if: always()
+                run: |
+                    if [ ! -f k6-summary.json ]; then exit 0; fi
+                    python3 - <<'EOF'
+                    import json, os
+                    with open("k6-summary.json") as fh: s = json.load(fh)
+                    m = s.get("metrics", {})
+                    def trend(name): t = m.get(name, {}).get("values", {}); return t.get("p(95)"), t.get("avg"), t.get("max")
+                    rate  = m.get("http_req_failed", {}).get("values", {}).get("rate", 0)
+                    p95, avg, mx = trend("http_req_duration")
+                    out = f"""## k6 perf summary
+
+                    | Metric | Value |
+                    | --- | --- |
+                    | Error rate          | {rate:.2%} |
+                    | http_req_duration   | avg {avg:.0f}ms · p95 {p95:.0f}ms · max {mx:.0f}ms |
+                    """
+                    with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as fh: fh.write(out)
+                    EOF
+
+            -   if: failure()
+                run: make ci-teardown WITH_LOGS=1
+
+            -   if: success() || cancelled()
+                run: make ci-teardown

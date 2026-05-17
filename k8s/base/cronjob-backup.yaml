@@ -1,0 +1,113 @@
+# Daily DB backup → S3-compatible object storage. The pattern:
+#   • `mysqldump --single-transaction` against DATABASE_URL
+#   • pipe through `gzip` (or `zstd` if you swap the image)
+#   • encrypt with `openssl enc -aes-256-cbc` using BACKUP_PASSPHRASE
+#   • upload to s3://$BACKUP_BUCKET/$ENV/<date>.sql.gz.enc via aws-cli
+#   • lifecycle on the bucket handles retention (30/90/365 day tiers)
+#
+# This is a one-shot Kubernetes-native backup. For full cluster DR
+# (PVC snapshots, multi-resource restore) layer Velero on top — that's
+# documented in docs/database.md.
+#
+# Disabled by default; opt in by uncommenting the CronJob entry in
+# k8s/base/kustomization.yaml. Production overlay should:
+#   • populate the Secret keys below
+#   • adjust the schedule if midnight UTC isn't your low-traffic window
+#   • point BACKUP_BUCKET / BACKUP_ENDPOINT at your prod bucket
+
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+    name: shopware-db-backup
+    labels:
+        app.kubernetes.io/name: shopware
+        app.kubernetes.io/component: backup
+spec:
+    # 03:17 UTC — off the hour to avoid colliding with other cluster crons.
+    schedule: "17 3 * * *"
+    concurrencyPolicy: Forbid
+    successfulJobsHistoryLimit: 3
+    failedJobsHistoryLimit: 7
+    startingDeadlineSeconds: 600
+    jobTemplate:
+        spec:
+            backoffLimit: 2
+            activeDeadlineSeconds: 3600
+            ttlSecondsAfterFinished: 86400
+            template:
+                spec:
+                    restartPolicy: OnFailure
+                    containers:
+                        - name: backup
+                          image: ghcr.io/EXAMPLE/shopware-backup:latest
+                          imagePullPolicy: IfNotPresent
+                          envFrom:
+                              - configMapRef: { name: shopware-config }
+                              - secretRef:    { name: shopware-secrets }
+                              - secretRef:    { name: shopware-backup-secrets }
+                          command:
+                              - /bin/sh
+                              - -c
+                              - |
+                                set -euo pipefail
+                                stamp=$(date -u +%Y%m%d-%H%M%S)
+                                # Parse host/port/db/user out of DATABASE_URL.
+                                eval "$(echo "$DATABASE_URL" | \
+                                    sed -nE 's|mysql://([^:]+):([^@]+)@([^:/]+):?([0-9]*)/([^?]+).*|user=\1 pass=\2 host=\3 port=\4 db=\5|p')"
+                                : "${port:=3306}"
+                                echo "▶ dumping $db from $host:$port"
+                                MYSQL_PWD="$pass" mysqldump \
+                                    -h "$host" -P "$port" -u "$user" \
+                                    --single-transaction --quick \
+                                    --routines --triggers --events \
+                                    --set-gtid-purged=OFF \
+                                    --default-character-set=utf8mb4 \
+                                    "$db" \
+                                | gzip -6 \
+                                | openssl enc -aes-256-cbc -pbkdf2 -salt \
+                                    -pass "env:BACKUP_PASSPHRASE" \
+                                > /tmp/backup.sql.gz.enc
+
+                                size=$(stat -c%s /tmp/backup.sql.gz.enc)
+                                echo "▶ encrypted dump: ${size} bytes"
+
+                                # Sanity floor — anything <1MB means something
+                                # went sideways even if the pipe didn't error.
+                                if [ "$size" -lt 1048576 ]; then
+                                    echo "::error::backup suspiciously small (<1MB) — aborting"
+                                    exit 1
+                                fi
+
+                                target="s3://${BACKUP_BUCKET}/${INSTANCE_ID}/${stamp}.sql.gz.enc"
+                                aws s3 cp /tmp/backup.sql.gz.enc "$target" \
+                                    ${BACKUP_ENDPOINT:+--endpoint-url=$BACKUP_ENDPOINT} \
+                                    --storage-class STANDARD_IA \
+                                    --metadata "host=$host,db=$db,sha=$INSTANCE_ID"
+                                echo "✓ uploaded $target"
+                          resources:
+                              requests: { cpu: 200m, memory: 256Mi }
+                              limits:   { cpu: 1,    memory: 2Gi }
+                          volumeMounts:
+                              - { name: tmp, mountPath: /tmp }
+                    volumes:
+                        - { name: tmp, emptyDir: { sizeLimit: 5Gi } }
+
+---
+# Backup-specific Secret — separate from shopware-secrets so the bucket
+# credentials can rotate independently. Populate via your secret manager.
+apiVersion: v1
+kind: Secret
+metadata:
+    name: shopware-backup-secrets
+type: Opaque
+stringData:
+    AWS_ACCESS_KEY_ID: "CHANGEME"
+    AWS_SECRET_ACCESS_KEY: "CHANGEME"
+    AWS_DEFAULT_REGION: "eu-central-1"
+    BACKUP_BUCKET: "shop-db-backups"
+    # Optional — set for S3-compatible providers (R2, Backblaze, MinIO).
+    BACKUP_ENDPOINT: ""
+    # Symmetric passphrase for openssl enc. Generate with:
+    #   openssl rand -base64 48
+    # Rotate yearly. Old backups stay decryptable with the old passphrase.
+    BACKUP_PASSPHRASE: "CHANGEME_LONG_RANDOM"

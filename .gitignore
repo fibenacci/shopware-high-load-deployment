@@ -1,0 +1,69 @@
+# Local secrets
+.env
+.env.local
+.env.*.local
+auth.json
+.secrets
+
+# Composer / npm
+/vendor/
+**/node_modules/
+composer.phar
+
+# Shopware runtime artefacts
+/var/
+/files/
+/public/media/
+/public/thumbnail/
+/public/theme/
+/public/bundles/
+/public/sitemap/
+/public/_temp/
+/public/asset-manifest.json
+/public/sw-domain-hash.html
+install.lock
+migrationHistory.json
+
+# DB dumps
+*.sql
+*.sql.gz
+*.dump
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
+*.bak
+*.old
+
+# Setup flags
+.setup_complete
+.db_imported
+
+# Per-target deployment env files — SSH config / image tags, never commit
+/deploy/bare-metal/env/*.env
+!/deploy/bare-metal/env/example.env
+/deploy/managed-container/env/*.env
+!/deploy/managed-container/env/example.env
+
+# Bare-metal build tmp dirs
+/.deploy-build*
+
+# fetch-dump source profiles (SSH targets + DB credentials)
+/.fetch-dump.local.env
+/.fetch-dump-audit.log
+
+# Local compose override — adopters' personal framework-file bind-mounts
+# (commit your own compose.override.yaml only if your team agrees on it)
+/compose.override.yaml
+
+# Skeleton files that get extracted via `make scaffold-shop` from the
+# Dockware image — adopters customise these locally and decide per repo
+# whether to commit them. Gitignored by default to keep the template lean.
+/public/index.php
+/public/.htaccess
+/src/Kernel.php
+/src/HttpKernel.php
+/config/bundles.php
+/config/services.yaml
+/config/preload.php

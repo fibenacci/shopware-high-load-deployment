@@ -1,0 +1,20 @@
+pyroscope:
+    persistence:
+        enabled: true
+        size: 30Gi
+
+minio:
+    enabled: false  # use filesystem for staging; swap to S3 for prod
+
+serviceMonitor:
+    enabled: true
+    labels: { release: kube-prometheus-stack }
+
+# Pyroscope writes to local PVC by default. For prod, point this at S3
+# (Backblaze B2 / Cloudflare R2 / Wasabi all work).
+# config:
+#   storage:
+#     backend: s3
+#     s3:
+#       bucket_name: pyroscope
+#       endpoint:    s3.us-east-1.amazonaws.com

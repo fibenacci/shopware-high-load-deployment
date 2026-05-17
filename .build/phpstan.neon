@@ -1,0 +1,26 @@
+parameters:
+    level: 8
+    paths:
+        - custom/static-plugins
+        - custom/plugins
+        - src
+        - tests
+    excludePaths:
+        - custom/*/*/Resources/*
+        - custom/*/*/Migration/*
+        - custom/*/*/node_modules
+        - custom/*/*/vendor
+        - vendor
+        - var
+    treatPhpDocTypesAsCertain: false
+    checkMissingIterableValueType: true
+    checkGenericClassInNonGenericObjectType: false
+    reportUnmatchedIgnoredErrors: false
+    ignoreErrors:
+        # Shopware DAL is heavily dynamic; ignore the unavoidable noise.
+        - '#Call to an undefined method Shopware\\Core\\Framework\\DataAbstractionLayer\\#'
+        - '#has no return type specified#'
+includes:
+    - vendor/phpstan/phpstan-symfony/extension.neon
+    - vendor/phpstan/phpstan-symfony/rules.neon
+    - vendor/phpstan/phpstan-phpunit/extension.neon

@@ -1,0 +1,78 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+    name: shopware-web
+    annotations:
+        cert-manager.io/cluster-issuer: letsencrypt
+        nginx.ingress.kubernetes.io/ssl-redirect:       "true"
+        nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+        # Production rate limits — higher than base because we have more
+        # capacity behind Varnish. Tune via load-test results.
+        nginx.ingress.kubernetes.io/limit-rps:         "50"
+        nginx.ingress.kubernetes.io/limit-rpm:         "1500"
+        nginx.ingress.kubernetes.io/limit-connections: "100"
+spec:
+    tls:
+        - { hosts: [shop.example.com, www.shop.example.com], secretName: shop-tls }
+    rules:
+        # Ingress → Varnish → shopware-web. Varnish handles edge caching with
+        # the VCL in docker/varnish/default.vcl; misses fall through to the
+        # app pods. Switch the backend back to `shopware-web` if you ever need
+        # to bypass Varnish for debugging.
+        - host: shop.example.com
+          http:
+              paths:
+                  - path: /
+                    pathType: Prefix
+                    backend:
+                        service:
+                            name: shopware-varnish
+                            port: { name: http }
+        - host: www.shop.example.com
+          http:
+              paths:
+                  - path: /
+                    pathType: Prefix
+                    backend:
+                        service:
+                            name: shopware-varnish
+                            port: { name: http }
+
+---
+# Throttled paths in prod — same path list as the base Ingress, just on the
+# prod hostname + TLS. These bypass Varnish on purpose (login / checkout /
+# api / admin should never hit a shared cache).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+    name: shopware-web-throttled
+    annotations:
+        cert-manager.io/cluster-issuer: letsencrypt
+        nginx.ingress.kubernetes.io/ssl-redirect:           "true"
+        nginx.ingress.kubernetes.io/force-ssl-redirect:     "true"
+        # Tighter limits for auth / API / admin in prod.
+        nginx.ingress.kubernetes.io/limit-rps:              "10"
+        nginx.ingress.kubernetes.io/limit-rpm:              "300"
+        nginx.ingress.kubernetes.io/limit-connections:      "30"
+        nginx.ingress.kubernetes.io/limit-burst-multiplier: "2"
+spec:
+    tls:
+        - { hosts: [shop.example.com, www.shop.example.com], secretName: shop-tls }
+    rules:
+        - host: shop.example.com
+          http:
+              paths:
+                  - { path: /account/login,    pathType: Prefix, backend: { service: { name: shopware-web, port: { name: http } } } }
+                  - { path: /account/register, pathType: Prefix, backend: { service: { name: shopware-web, port: { name: http } } } }
+                  - { path: /account/recover,  pathType: Prefix, backend: { service: { name: shopware-web, port: { name: http } } } }
+                  - { path: /store-api,        pathType: Prefix, backend: { service: { name: shopware-web, port: { name: http } } } }
+                  - { path: /api,              pathType: Prefix, backend: { service: { name: shopware-web, port: { name: http } } } }
+                  - { path: /admin,            pathType: Prefix, backend: { service: { name: shopware-web, port: { name: http } } } }
+                  - { path: /search,           pathType: Prefix, backend: { service: { name: shopware-web, port: { name: http } } } }
+                  - { path: /widgets/search,   pathType: Prefix, backend: { service: { name: shopware-web, port: { name: http } } } }
+        - host: www.shop.example.com
+          http:
+              paths:
+                  - { path: /account/login,    pathType: Prefix, backend: { service: { name: shopware-web, port: { name: http } } } }
+                  - { path: /store-api,        pathType: Prefix, backend: { service: { name: shopware-web, port: { name: http } } } }
+                  - { path: /api,              pathType: Prefix, backend: { service: { name: shopware-web, port: { name: http } } } }

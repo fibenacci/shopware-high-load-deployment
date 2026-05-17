@@ -1,0 +1,134 @@
+# =============================================================================
+# Local LGTM stack — Prometheus + Grafana + Loki + Tempo + Pyroscope.
+#
+# Joins the project's `shop` network so Grafana / Prometheus / Pyroscope reach
+# the application containers directly. Promtail tails Docker's JSON log driver
+# files, so any container that writes to stdout/stderr is captured automatically.
+# =============================================================================
+
+name: ${COMPOSE_PROJECT_NAME:-shopware-shop}-monitoring
+
+services:
+    prometheus:
+        image: prom/prometheus:v2.55.0
+        container_name: ${COMPOSE_PROJECT_NAME:-shopware-shop}-prometheus
+        command:
+            - --config.file=/etc/prometheus/prometheus.yaml
+            - --storage.tsdb.path=/prometheus
+            - --storage.tsdb.retention.time=14d
+            - --web.enable-remote-write-receiver
+            - --enable-feature=native-histograms
+        volumes:
+            - ./prometheus/prometheus.yaml:/etc/prometheus/prometheus.yaml:ro
+            - ./prometheus/alerts.yaml:/etc/prometheus/alerts.yaml:ro
+            - prometheus_data:/prometheus
+        environment:
+            - VIRTUAL_HOST=prometheus.${PROJECT_DOMAIN:-shop.docker}
+            - VIRTUAL_PORT=9090
+        networks: [shop, proxy]
+
+    loki:
+        image: grafana/loki:3.2.0
+        container_name: ${COMPOSE_PROJECT_NAME:-shopware-shop}-loki
+        command: -config.file=/etc/loki/loki.yaml
+        volumes:
+            - ./loki/loki.yaml:/etc/loki/loki.yaml:ro
+            - loki_data:/loki
+        networks: [shop, proxy]
+        environment:
+            - VIRTUAL_HOST=loki.${PROJECT_DOMAIN:-shop.docker}
+            - VIRTUAL_PORT=3100
+
+    promtail:
+        image: grafana/promtail:3.2.0
+        container_name: ${COMPOSE_PROJECT_NAME:-shopware-shop}-promtail
+        command: -config.file=/etc/promtail/promtail.yaml
+        volumes:
+            - ./promtail/promtail.yaml:/etc/promtail/promtail.yaml:ro
+            - /var/lib/docker/containers:/var/lib/docker/containers:ro
+            - /var/run/docker.sock:/var/run/docker.sock:ro
+        depends_on: [loki]
+        networks: [shop]
+
+    tempo:
+        image: grafana/tempo:2.6.0
+        container_name: ${COMPOSE_PROJECT_NAME:-shopware-shop}-tempo
+        command: -config.file=/etc/tempo/tempo.yaml
+        volumes:
+            - ./tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro
+            - tempo_data:/tmp/tempo
+        networks: [shop]
+
+    pyroscope:
+        image: grafana/pyroscope:1.8.0
+        container_name: ${COMPOSE_PROJECT_NAME:-shopware-shop}-pyroscope
+        command: ["server"]
+        environment:
+            - VIRTUAL_HOST=pyroscope.${PROJECT_DOMAIN:-shop.docker}
+            - VIRTUAL_PORT=4040
+        volumes:
+            - pyroscope_data:/data
+        networks: [shop, proxy]
+
+    otel-collector:
+        image: otel/opentelemetry-collector-contrib:0.115.0
+        container_name: ${COMPOSE_PROJECT_NAME:-shopware-shop}-otel-collector
+        command: ["--config=/etc/otelcol/config.yaml"]
+        volumes:
+            - ../apm/opentelemetry/otel-collector.yaml:/etc/otelcol/config.yaml:ro
+        networks: [shop]
+
+    node-exporter:
+        image: prom/node-exporter:v1.8.2
+        container_name: ${COMPOSE_PROJECT_NAME:-shopware-shop}-node-exporter
+        pid: host
+        volumes:
+            - /:/host:ro,rslave
+        command:
+            - --path.rootfs=/host
+            - --collector.filesystem.ignored-mount-points=^/(sys|proc|dev|host|etc)($$|/)
+        networks: [shop]
+
+    cadvisor:
+        image: gcr.io/cadvisor/cadvisor:v0.49.1
+        container_name: ${COMPOSE_PROJECT_NAME:-shopware-shop}-cadvisor
+        privileged: true
+        devices: ["/dev/kmsg"]
+        volumes:
+            - /:/rootfs:ro
+            - /var/run:/var/run:ro
+            - /sys:/sys:ro
+            - /var/lib/docker:/var/lib/docker:ro
+        networks: [shop]
+
+    grafana:
+        image: grafana/grafana:11.2.0
+        container_name: ${COMPOSE_PROJECT_NAME:-shopware-shop}-grafana
+        environment:
+            - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+            - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+            - GF_AUTH_ANONYMOUS_ENABLED=${GRAFANA_ANON_ENABLED:-true}
+            - GF_USERS_DEFAULT_THEME=dark
+            - GF_INSTALL_PLUGINS=grafana-pyroscope-app
+            - VIRTUAL_HOST=grafana.${PROJECT_DOMAIN:-shop.docker}
+            - VIRTUAL_PORT=3000
+        volumes:
+            - grafana_data:/var/lib/grafana
+            - ./grafana/provisioning:/etc/grafana/provisioning:ro
+            - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+        depends_on: [prometheus, loki, tempo, pyroscope]
+        networks: [shop, proxy]
+
+volumes:
+    prometheus_data:
+    loki_data:
+    tempo_data:
+    pyroscope_data:
+    grafana_data:
+
+networks:
+    shop:
+        external: true
+        name: ${COMPOSE_PROJECT_NAME:-shopware-shop}_shop
+    proxy:
+        external: true

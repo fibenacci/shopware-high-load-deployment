@@ -1,0 +1,200 @@
+name: Deploy
+
+on:
+    workflow_dispatch:
+        inputs:
+            environment:
+                description: Target environment
+                required: true
+                type: choice
+                options: [staging, production]
+            image_tag:
+                description: Container image tag to deploy (defaults to SHA)
+                required: false
+                type: string
+    workflow_call:
+        inputs:
+            environment:
+                required: true
+                type: string
+            image_tag:
+                required: false
+                type: string
+
+concurrency:
+    # Serialize deploys per environment so two pipelines don't fight over the
+    # same cluster.
+    group: deploy-${{ inputs.environment }}
+    cancel-in-progress: false
+
+jobs:
+    # -----------------------------------------------------------------
+    # Dispatch by DEPLOYMENT_MODE — same workflow handles k8s + bare-metal.
+    # -----------------------------------------------------------------
+    config:
+        name: Load global config
+        runs-on: ubuntu-latest
+        outputs:
+            mode: ${{ steps.cfg.outputs.DEPLOYMENT_MODE }}
+        steps:
+            -   uses: actions/checkout@v4
+            -   id: cfg
+                run: |
+                    set -a; . ./deployment.config; set +a
+                    echo "DEPLOYMENT_MODE=$DEPLOYMENT_MODE" >> "$GITHUB_OUTPUT"
+
+    # -----------------------------------------------------------------
+    # Bare-metal — driven by the Shopware-maintained project-deployer action
+    # which wraps Deployer + the deployment-helper.
+    # https://github.com/shopware/github-actions/tree/main/project-deployer
+    # -----------------------------------------------------------------
+    deploy-bare-metal:
+        name: Deploy (bare-metal) to ${{ inputs.environment }}
+        needs: config
+        if: needs.config.outputs.mode == 'bare-metal'
+        runs-on: ubuntu-latest
+        environment: ${{ inputs.environment }}
+        steps:
+            -   uses: actions/checkout@v4
+            -   uses: shopware/github-actions/project-deployer@main
+                with:
+                    deploy-host: ${{ secrets.DEPLOY_HOST }}
+                    deploy-user: ${{ secrets.DEPLOY_USER }}
+                    deploy-key:  ${{ secrets.DEPLOY_SSH_KEY }}
+                    deploy-env:  ${{ inputs.environment }}
+                env:
+                    COMPOSER_AUTH: '{"github-oauth":{"github.com":"${{ secrets.COMPOSER_AUTH_TOKEN }}"},"bearer":{"packages.shopware.com":"${{ secrets.SHOPWARE_PACKAGES_TOKEN }}"}}'
+
+    # -----------------------------------------------------------------
+    # Managed-container — SSH + `docker compose pull && up -d` against a
+    # single Docker host (TimmeHosting / generic VPS). Same image registry
+    # as the kubernetes path.
+    # -----------------------------------------------------------------
+    deploy-managed-container:
+        name: Deploy (managed-container) to ${{ inputs.environment }}
+        needs: config
+        if: needs.config.outputs.mode == 'managed-container'
+        runs-on: ubuntu-latest
+        environment: ${{ inputs.environment }}
+        steps:
+            -   uses: actions/checkout@v4
+            -   name: Install SSH key
+                run: |
+                    mkdir -p ~/.ssh
+                    echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
+                    chmod 600 ~/.ssh/id_ed25519
+                    ssh-keyscan -H "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts
+            -   name: Materialise env file from secret
+                # The full deploy/managed-container/env/<env>.env body lives
+                # in a single GH Actions secret. Stored opaquely; no template
+                # interpolation needed.
+                env:
+                    ENV_BODY: ${{ secrets.MANAGED_CONTAINER_ENV }}
+                run: |
+                    mkdir -p deploy/managed-container/env
+                    printf '%s\n' "${ENV_BODY}" > deploy/managed-container/env/${{ inputs.environment }}.env
+            -   name: Resolve image tag
+                id: tag
+                run: |
+                    tag="${{ inputs.image_tag }}"
+                    [ -z "$tag" ] && tag="${{ github.sha }}"
+                    echo "tag=${tag:0:7}" >> "$GITHUB_OUTPUT"
+            -   name: Deploy
+                env:
+                    ENV: ${{ inputs.environment }}
+                    IMAGE_TAG: ${{ steps.tag.outputs.tag }}
+                    GHCR_USER: ${{ github.actor }}
+                    GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                run: deploy/managed-container/deploy.sh
+
+    # -----------------------------------------------------------------
+    # Kubernetes — image-tag pinning + pre-deploy migration Job
+    # -----------------------------------------------------------------
+    deploy-kubernetes:
+        name: Deploy (kubernetes) to ${{ inputs.environment }}
+        needs: config
+        if: needs.config.outputs.mode == 'kubernetes'
+        runs-on: ubuntu-latest
+        environment: ${{ inputs.environment }}
+        steps:
+            -   uses: actions/checkout@v4
+
+            -   name: Configure kubectl
+                uses: azure/k8s-set-context@v4
+                with:
+                    method: kubeconfig
+                    kubeconfig: ${{ secrets.KUBECONFIG }}
+
+            -   name: Verify cluster
+                run: |
+                    kubectl cluster-info
+                    kubectl get nodes -o wide
+
+            -   uses: imranismail/setup-kustomize@v2
+
+            -   name: Set image tag
+                id: tag
+                run: |
+                    tag="${{ inputs.image_tag }}"
+                    [ -z "$tag" ] && tag="${{ github.sha }}"
+                    short="${tag:0:7}"
+                    echo "tag=$tag" >> "$GITHUB_OUTPUT"
+                    echo "short=$short" >> "$GITHUB_OUTPUT"
+
+            -   name: Pin image tag in overlay
+                working-directory: k8s/overlays/${{ inputs.environment }}
+                run: |
+                    kustomize edit set image \
+                        ghcr.io/${{ github.repository }}/shopware=ghcr.io/${{ github.repository }}/shopware:${{ steps.tag.outputs.short }} \
+                        ghcr.io/${{ github.repository }}/shopware-worker=ghcr.io/${{ github.repository }}/shopware-worker:${{ steps.tag.outputs.short }} \
+                        ghcr.io/${{ github.repository }}/shopware-backup=ghcr.io/${{ github.repository }}/shopware-backup:${{ steps.tag.outputs.short }}
+
+            -   name: Pre-deploy migration job
+                run: |
+                    # One-shot Job that runs `vendor/bin/shopware-deployment-helper run`
+                    # via the `migrate` role of the entrypoint. Named with
+                    # the image tag so re-applying is idempotent.
+                    cat <<EOF | kubectl apply -f -
+                    apiVersion: batch/v1
+                    kind: Job
+                    metadata:
+                      name: shopware-migrate-${{ steps.tag.outputs.short }}
+                      namespace: shopware-${{ inputs.environment }}
+                    spec:
+                      ttlSecondsAfterFinished: 600
+                      backoffLimit: 1
+                      template:
+                        spec:
+                          restartPolicy: Never
+                          containers:
+                            - name: migrate
+                              image: ghcr.io/${{ github.repository }}/shopware:${{ steps.tag.outputs.short }}
+                              args: ['migrate']
+                              envFrom:
+                                - configMapRef: { name: shopware-config }
+                                - secretRef:    { name: shopware-secrets }
+                    EOF
+                    kubectl -n shopware-${{ inputs.environment }} \
+                        wait --for=condition=complete --timeout=10m \
+                        job/shopware-migrate-${{ steps.tag.outputs.short }}
+
+            -   name: Apply overlay
+                run: kubectl apply -k k8s/overlays/${{ inputs.environment }}
+
+            -   name: Wait for rollout
+                run: |
+                    kubectl -n shopware-${{ inputs.environment }} rollout status deploy/shopware-web    --timeout=10m
+                    kubectl -n shopware-${{ inputs.environment }} rollout status deploy/shopware-worker --timeout=10m
+
+            -   name: Smoke test
+                run: |
+                    url="${{ vars.SMOKE_TEST_URL }}"
+                    [ -z "$url" ] && exit 0
+                    for i in $(seq 1 20); do
+                        code=$(curl -s -o /dev/null -w '%{http_code}' "$url" || echo 000)
+                        echo "  attempt $i → HTTP $code"
+                        [ "$code" = "200" ] && exit 0
+                        sleep 5
+                    done
+                    echo "::error::Smoke test failed"
+                    exit 1

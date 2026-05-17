@@ -1,0 +1,208 @@
+name: Sync docs to GitHub Wiki
+
+# Every push to `main` that touches docs/ rewrites the GitHub Wiki from
+# the docs/ tree. The wiki is auto-generated and read-only for humans —
+# direct edits to the wiki get overwritten on the next sync.
+#
+# Why we do it this way:
+#   • One source of truth (docs/) instead of "what's in docs/ vs what's
+#     on the wiki", which always drifts
+#   • Docs reviewable via PR (the wiki UI has no review flow)
+#   • The wiki then provides the search + sidebar + cross-link UX the
+#     GitHub source view doesn't have
+#
+# How the rewrite works:
+#   docs/README.md            → Home
+#   docs/<file>.md            → <file>
+#   docs/<dir>/<file>.md      → <dir>-<file>     (wiki is flat by design)
+#   docs/stories/**           → NOT synced       (work-in-progress, not docs)
+#   relative `[text](./other.md)` links → `[text](other)`
+#   _Sidebar.md generated from docs/README.md's section structure
+
+on:
+    push:
+        branches: [main]
+        paths:
+            - 'docs/**'
+            - '.github/workflows/wiki-sync.yml'
+    workflow_dispatch:
+
+permissions:
+    contents: write
+
+concurrency:
+    group: wiki-sync
+    cancel-in-progress: false   # don't lose intermediate updates
+
+jobs:
+    sync:
+        runs-on: ubuntu-latest
+        timeout-minutes: 5
+        steps:
+            -   uses: actions/checkout@v4
+                with:
+                    path: source
+
+            -   name: Initialise the wiki if it doesn't exist yet
+                # GitHub creates the wiki repo lazily — if no human has
+                # opened a wiki page in the UI yet, `git clone` fails.
+                # Curl the wiki page to trigger creation, retry with backoff.
+                env:
+                    GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                    REPO: ${{ github.repository }}
+                run: |
+                    for attempt in 1 2 3 4 5; do
+                        if git ls-remote "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.wiki.git" >/dev/null 2>&1; then
+                            echo "✓ wiki repo reachable"
+                            break
+                        fi
+                        echo "  attempt $attempt: wiki not yet initialised — pinging the GitHub API to nudge it"
+                        gh api "repos/${REPO}" --jq '.has_wiki' >/dev/null 2>&1 || true
+                        sleep $((attempt * 3))
+                        if [ "$attempt" = "5" ]; then
+                            echo "::error::wiki repo unreachable after 5 attempts. Open Settings → Features → enable Wikis, then visit the wiki tab once to seed it."
+                            exit 1
+                        fi
+                    done
+
+            -   name: Clone the wiki repo
+                env:
+                    GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                    REPO: ${{ github.repository }}
+                run: |
+                    git clone "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.wiki.git" wiki
+                    cd wiki
+                    git config user.name  "github-actions[bot]"
+                    git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+            -   name: Render docs into the wiki layout
+                # Python because shell+sed for link rewriting is brittle.
+                run: |
+                    python3 <<'PY'
+                    import os
+                    import re
+                    import shutil
+                    from pathlib import Path
+
+                    SRC = Path("source/docs")
+                    DST = Path("wiki")
+
+                    # Skip these from the sync — they're WIP / template files
+                    # that don't belong on the public wiki.
+                    SKIP_DIRS = {"stories"}
+                    SKIP_FILES = {".gitkeep", "user-story-template.md"}
+
+                    # ----- Walk the source tree, build the rename map first ----
+                    src_to_wiki = {}
+                    for md in SRC.rglob("*.md"):
+                        rel = md.relative_to(SRC)
+                        if any(part in SKIP_DIRS for part in rel.parts):
+                            continue
+                        if rel.name in SKIP_FILES:
+                            continue
+                        if rel == Path("README.md"):
+                            wiki_name = "Home.md"
+                        else:
+                            # Subdir paths flatten to dash-joined names.
+                            wiki_name = "-".join(rel.with_suffix("").parts) + ".md"
+                        src_to_wiki[rel] = wiki_name
+
+                    # ----- Link rewriter --------------------------------------
+                    # Map any `./foo.md`, `foo.md`, `../decision-records/0001-x.md`
+                    # form to the wiki page name (no extension).
+                    def wiki_target_for(src_path: Path, link: str) -> str | None:
+                        if link.startswith(("http://", "https://", "#", "mailto:")):
+                            return None
+                        # Strip anchor — preserve to re-append later.
+                        anchor = ""
+                        if "#" in link:
+                            link, anchor = link.split("#", 1)
+                            anchor = "#" + anchor
+                        if not link.endswith(".md"):
+                            return None
+                        # Resolve relative to the source file's dir.
+                        target = (src_path.parent / link).resolve()
+                        try:
+                            target_rel = target.relative_to(SRC.resolve())
+                        except ValueError:
+                            return None   # link points outside docs/ — leave alone
+                        wiki_name = src_to_wiki.get(target_rel)
+                        if not wiki_name:
+                            return None
+                        # Wiki URLs drop the .md extension.
+                        return wiki_name[:-3] + anchor
+
+                    link_re = re.compile(r"\[([^\]]*)\]\(([^)]+)\)")
+
+                    def rewrite(text: str, src_path: Path) -> str:
+                        def sub(m):
+                            label, target = m.group(1), m.group(2)
+                            new = wiki_target_for(src_path, target)
+                            return f"[{label}]({new})" if new else m.group(0)
+                        return link_re.sub(sub, text)
+
+                    # ----- Wipe old wiki content (preserve .git) -------------
+                    for entry in DST.iterdir():
+                        if entry.name == ".git":
+                            continue
+                        if entry.is_dir():
+                            shutil.rmtree(entry)
+                        else:
+                            entry.unlink()
+
+                    # ----- Write the rendered pages --------------------------
+                    for src_rel, wiki_name in src_to_wiki.items():
+                        src_file = SRC / src_rel
+                        content = src_file.read_text(encoding="utf-8")
+                        content = rewrite(content, src_file)
+                        # Wiki convention: a soft note at the bottom.
+                        content = content.rstrip() + (
+                            "\n\n---\n"
+                            f"_Generated from `docs/{src_rel}` — edits to the wiki are overwritten on the next sync._\n"
+                        )
+                        (DST / wiki_name).write_text(content, encoding="utf-8")
+                        print(f"  ✓ {src_rel} → {wiki_name}")
+
+                    # ----- Generate _Sidebar.md from the README index --------
+                    # Pull H2 headings + the file references underneath them.
+                    readme = (SRC / "README.md").read_text(encoding="utf-8")
+                    sidebar_lines = ["# Documentation\n"]
+                    current_section = None
+                    for line in readme.splitlines():
+                        h2 = re.match(r"^##\s+(.+)$", line)
+                        if h2:
+                            current_section = h2.group(1).strip()
+                            sidebar_lines.append(f"\n### {current_section}\n")
+                            continue
+                        # Match a doc reference inside a table row.
+                        ref = re.search(r"\[`([^`]+\.md)`\]\((\./[^)]+)\)", line)
+                        if ref and current_section:
+                            label = ref.group(1).removesuffix(".md")
+                            target = ref.group(2)
+                            wiki_target = wiki_target_for(SRC / "README.md", target)
+                            if wiki_target:
+                                sidebar_lines.append(f"- [{label}]({wiki_target})")
+                    (DST / "_Sidebar.md").write_text("\n".join(sidebar_lines) + "\n", encoding="utf-8")
+                    print("  ✓ _Sidebar.md generated from docs/README.md")
+
+                    # ----- Footer with provenance ----------------------------
+                    sha = os.environ.get("GITHUB_SHA", "")[:7]
+                    (DST / "_Footer.md").write_text(
+                        f"Auto-published from [`docs/`](https://github.com/{os.environ['GITHUB_REPOSITORY']}/tree/main/docs) "
+                        f"at commit `{sha}`. Edit the source, not the wiki.\n",
+                        encoding="utf-8",
+                    )
+                    print("  ✓ _Footer.md generated")
+                    PY
+
+            -   name: Commit + push if changed
+                run: |
+                    cd wiki
+                    if git diff --quiet && git diff --cached --quiet; then
+                        echo "no changes — wiki is already in sync"
+                        exit 0
+                    fi
+                    git add -A
+                    git commit -m "docs: sync from main @ ${GITHUB_SHA:0:7}" \
+                        -m "Source: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}"
+                    git push

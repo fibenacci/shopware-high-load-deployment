@@ -1,0 +1,66 @@
+# editorconfig.org — keeps Windows / macOS / Linux editors in sync so
+# tab-vs-space wars never reach a PR review.
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+indent_style = space
+indent_size = 4
+insert_final_newline = true
+trim_trailing_whitespace = true
+max_line_length = 120
+
+# PHP — PSR-12.
+[*.php]
+indent_size = 4
+
+# JavaScript / TypeScript — match the existing tsconfig style.
+[*.{js,mjs,cjs,ts,tsx,vue}]
+indent_size = 4
+
+# JSON / YAML / TOML / Dockerfile — wider community defaults vary; we
+# follow the existing repo style (2 spaces YAML/JSON, 4 spaces TOML).
+[*.{json,yml,yaml}]
+indent_size = 4
+
+[*.{toml,ini,cfg}]
+indent_size = 4
+
+# Shell scripts — 4-space indent, no tabs.
+[*.{sh,bash}]
+indent_size = 4
+
+# Makefile NEEDS tabs — that's the spec, don't fight it.
+[{Makefile,*.mk,Makefile.*}]
+indent_style = tab
+
+# Markdown — keep trailing whitespace (used for hard line breaks).
+[*.md]
+trim_trailing_whitespace = false
+max_line_length = off
+
+# Twig — 4 spaces matches Symfony convention.
+[*.twig]
+indent_size = 4
+
+# Snippet files — 4 spaces, but no line-length limit (long translations).
+[**/snippet/**/*.json]
+max_line_length = off
+
+# Lock files — leave alone.
+[{composer.lock,package-lock.json,yarn.lock,*.lock}]
+indent_style = unset
+indent_size = unset
+end_of_line = unset
+insert_final_newline = unset
+trim_trailing_whitespace = unset
+charset = unset
+
+# Generated thumbnails / vendored binaries — never apply rules.
+[{vendor/**,node_modules/**,**/Resources/public/**}]
+indent_style = unset
+end_of_line = unset
+insert_final_newline = unset
+trim_trailing_whitespace = unset

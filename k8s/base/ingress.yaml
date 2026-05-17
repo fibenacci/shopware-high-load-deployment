@@ -1,0 +1,95 @@
+# ----------------------------------------------------------------------------
+# Two Ingress resources on the same hostname:
+#   1. The main one — high baseline rate limit for normal browsing.
+#   2. A per-path one for sensitive endpoints (login, checkout, API, search)
+#      with stricter limits to absorb credential-stuffing, scraping bots,
+#      and accidental DOS from misbehaving integrations.
+#
+# ingress-nginx merges rules across Ingress objects on the same host, with
+# more-specific paths winning. The two-Ingress pattern keeps the base case
+# readable.
+#
+# ingress-nginx annotation reference:
+#   https://kubernetes.github.io/ingress-nginx/user-guide/nginx-configuration/annotations/
+# ----------------------------------------------------------------------------
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+    name: shopware-web
+    annotations:
+        nginx.ingress.kubernetes.io/proxy-body-size:     "64m"
+        nginx.ingress.kubernetes.io/proxy-read-timeout:  "300"
+        nginx.ingress.kubernetes.io/proxy-send-timeout:  "300"
+        # Global baseline limits. Per-IP, sliding-window counters in nginx.
+        # Picked generously — normal browse + image requests stay under it.
+        nginx.ingress.kubernetes.io/limit-rps:        "20"
+        nginx.ingress.kubernetes.io/limit-rpm:        "600"
+        nginx.ingress.kubernetes.io/limit-connections: "30"
+        # cert-manager — uncomment + create a ClusterIssuer in the overlay
+        # cert-manager.io/cluster-issuer: letsencrypt
+        # ----------------------------------------------------------------
+        # Security headers — applied uniformly to both Varnish-cached and
+        # direct-app responses. Shopware sets none of these by default.
+        # CSP starts permissive (Shopware admin + storefront ship inline
+        # scripts); switch to Report-Only first on new projects, then
+        # tighten over a week of monitoring.
+        #
+        # Reference: https://owasp.org/www-project-secure-headers/
+        # ----------------------------------------------------------------
+        nginx.ingress.kubernetes.io/server-snippet: |
+            more_set_headers "Strict-Transport-Security: max-age=63072000; includeSubDomains; preload";
+            more_set_headers "X-Content-Type-Options: nosniff";
+            more_set_headers "X-Frame-Options: SAMEORIGIN";
+            more_set_headers "Referrer-Policy: strict-origin-when-cross-origin";
+            more_set_headers "Permissions-Policy: geolocation=(), microphone=(), camera=(), payment=(self)";
+            more_set_headers "Cross-Origin-Opener-Policy: same-origin";
+            more_set_headers "Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data: https:; connect-src 'self' https:; frame-ancestors 'self'; base-uri 'self'; form-action 'self'";
+spec:
+    ingressClassName: nginx
+    tls:
+        - hosts: ["shop.example.com"]
+          secretName: shop-tls
+    rules:
+        - host: shop.example.com
+          http:
+              paths:
+                  - path: /
+                    pathType: Prefix
+                    backend:
+                        service:
+                            name: shopware-web
+                            port: { name: http }
+
+---
+# Sensitive paths — tighter limits. Login/account brute-force, store-api
+# scraping, oversized checkout traffic. Anonymous traffic to these is
+# rare; legitimate users tolerate a stricter ceiling.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+    name: shopware-web-throttled
+    annotations:
+        nginx.ingress.kubernetes.io/proxy-body-size:    "64m"
+        nginx.ingress.kubernetes.io/limit-rps:          "5"
+        nginx.ingress.kubernetes.io/limit-rpm:          "120"
+        nginx.ingress.kubernetes.io/limit-connections:  "10"
+        # Burst factor — temporary excess allowed before 429. 2x of limit-rps.
+        nginx.ingress.kubernetes.io/limit-burst-multiplier: "2"
+spec:
+    ingressClassName: nginx
+    tls:
+        - hosts: ["shop.example.com"]
+          secretName: shop-tls
+    rules:
+        - host: shop.example.com
+          http:
+              paths:
+                  - { path: /account/login,    pathType: Prefix, backend: { service: { name: shopware-web, port: { name: http } } } }
+                  - { path: /account/register, pathType: Prefix, backend: { service: { name: shopware-web, port: { name: http } } } }
+                  - { path: /account/recover,  pathType: Prefix, backend: { service: { name: shopware-web, port: { name: http } } } }
+                  - { path: /store-api,        pathType: Prefix, backend: { service: { name: shopware-web, port: { name: http } } } }
+                  - { path: /api,              pathType: Prefix, backend: { service: { name: shopware-web, port: { name: http } } } }
+                  - { path: /admin,            pathType: Prefix, backend: { service: { name: shopware-web, port: { name: http } } } }
+                  - { path: /search,           pathType: Prefix, backend: { service: { name: shopware-web, port: { name: http } } } }
+                  - { path: /widgets/search,   pathType: Prefix, backend: { service: { name: shopware-web, port: { name: http } } } }

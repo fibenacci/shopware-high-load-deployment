@@ -1,0 +1,37 @@
+# Single-binary Loki — fine for small clusters and dev. For real prod,
+# switch to the SimpleScalable mode and S3-compatible object storage.
+
+deploymentMode: SingleBinary
+
+loki:
+    auth_enabled: false
+    commonConfig:
+        replication_factor: 1
+    storage:
+        type: filesystem
+    schemaConfig:
+        configs:
+            - from: 2024-01-01
+              store: tsdb
+              object_store: filesystem
+              schema: v13
+              index: { prefix: index_, period: 24h }
+    limits_config:
+        retention_period: 168h
+        ingestion_rate_mb: 10
+        ingestion_burst_size_mb: 20
+
+singleBinary:
+    replicas: 1
+    persistence:
+        enabled: true
+        size: 50Gi
+
+read:
+    replicas: 0
+write:
+    replicas: 0
+backend:
+    replicas: 0
+test:
+    enabled: false

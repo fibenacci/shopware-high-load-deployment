@@ -1,0 +1,29 @@
+# Production volume patch — remove the local emptyDir mounts for media /
+# theme / thumbnail / sitemap / bundles. Once S3 is wired (see
+# docs/object-storage.md), these paths are served from the bucket via the
+# Flysystem layer; the in-pod path is never read.
+#
+# NOT applied to base or staging by default — comment this entry out in
+# kustomization.yaml if your overlay still relies on local disk.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+    name: shopware-web
+spec:
+    template:
+        spec:
+            containers:
+                - name: shopware
+                  volumeMounts:
+                      # Only var-cache / var-log / var-tmp remain — they
+                      # MUST stay local (per-pod fs cache, per-pod logs).
+                      - { name: var-tmp,   mountPath: /tmp }
+                      - { name: var-cache, mountPath: /var/www/html/var/cache }
+                      - { name: var-log,   mountPath: /var/www/html/var/log }
+                      # media/thumbnail/theme/sitemap/bundles mounts deleted
+                      # — Flysystem reads/writes via S3 directly.
+            volumes:
+                - { name: var-tmp,   emptyDir: {} }
+                - { name: var-cache, emptyDir: {} }
+                - { name: var-log,   emptyDir: {} }

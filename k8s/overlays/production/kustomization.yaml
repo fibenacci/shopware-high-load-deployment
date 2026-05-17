@@ -1,0 +1,38 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: shopware-production
+
+commonAnnotations:
+    deployment.kubernetes.io/environment: production
+
+resources:
+    - ../../base
+
+patches:
+    - path: patch-namespace.yaml
+    - path: patch-replicas.yaml
+    - path: patch-ingress.yaml
+    - path: patch-resources.yaml
+    # Strip emptyDir media/theme/thumbnail/sitemap/bundles mounts — prod
+    # serves these via S3 (see docs/object-storage.md). Comment out if
+    # your shop hasn't migrated to object storage yet.
+    - path: patch-volumes.yaml
+
+images:
+    - { name: ghcr.io/EXAMPLE/shopware,        newTag: stable }
+    - { name: ghcr.io/EXAMPLE/shopware-worker, newTag: stable }
+
+configMapGenerator:
+    - name: shopware-config
+      behavior: merge
+      literals:
+          - APP_ENV=prod
+          - APP_DEBUG=0
+          - INSTANCE_ID=shopware-production
+          - SHOPWARE_HTTP_CACHE_ENABLED=1
+          - SHOPWARE_HTTP_DEFAULT_TTL=7200
+          - PHP_FPM_MAX_CHILDREN=40
+          - PHP_FPM_START_SERVERS=8
+          - PHP_FPM_MIN_SPARE=4
+          - PHP_FPM_MAX_SPARE=16

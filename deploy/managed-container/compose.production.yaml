@@ -1,0 +1,210 @@
+# =============================================================================
+# Production compose stack for a single-host managed-container hoster.
+#
+# Designed for TimmeHosting Container Hosting and equivalents — one Docker
+# host, reverse proxy at the hoster's edge, optional managed stateful services.
+#
+# Deploy via:
+#   deploy/managed-container/deploy.sh           (which SSHes + compose pull + up)
+#
+# The image tag is driven by IMAGE_TAG (commit SHA from CI). Other values
+# come from deploy/managed-container/env/<env>.env, layered on top of
+# deployment.config — both are passed to `docker compose --env-file`.
+# =============================================================================
+
+name: ${PROJECT_NAME}
+
+# Reusable healthcheck + restart policy block, so the per-service entries
+# below stay readable.
+x-app-defaults: &app-defaults
+    image: ${IMAGE_APP}:${IMAGE_TAG:-stable}
+    pull_policy: always
+    restart: unless-stopped
+    env_file:
+        - ../../deployment.config
+        - env/${ENV:-production}.env
+    environment:
+        APP_ENV: prod
+        APP_DEBUG: "0"
+    volumes:
+        - shopware_media:/var/www/html/public/media
+        - shopware_thumbnail:/var/www/html/public/thumbnail
+        - shopware_theme:/var/www/html/public/theme
+        - shopware_sitemap:/var/www/html/public/sitemap
+        - shopware_bundles:/var/www/html/public/bundles
+        - shopware_files:/var/www/html/files
+        - shopware_logs:/var/www/html/var/log
+    logging:
+        driver: json-file
+        options: { max-size: '10m', max-file: '5' }
+
+services:
+    # -------------------------------------------------------------------
+    # Web — FrankenPHP / php-fpm depending on PHP_RUNTIME in deployment.config.
+    # Listens on plain HTTP; the hoster's edge proxy terminates TLS.
+    # -------------------------------------------------------------------
+    web:
+        <<: *app-defaults
+        command: ["web"]
+        ports:
+            # Bind to localhost only — the hoster's edge proxy reverse-proxies
+            # to this. Override APP_PORT in env/<env>.env if your hoster
+            # expects 0.0.0.0 binding.
+            - '${APP_BIND:-127.0.0.1}:${APP_PORT:-8000}:8000'
+        depends_on:
+            db:    { condition: service_healthy, required: false }
+            redis: { condition: service_healthy, required: false }
+        healthcheck:
+            test: ['CMD', 'shopware-healthcheck']
+            interval: 10s
+            timeout: 5s
+            retries: 6
+            start_period: 30s
+
+    # -------------------------------------------------------------------
+    # Worker — Messenger consumer loop. Same image, different role.
+    # -------------------------------------------------------------------
+    worker:
+        <<: *app-defaults
+        command: ["worker"]
+        deploy:
+            replicas: ${WORKER_REPLICAS:-2}
+        depends_on:
+            web: { condition: service_healthy }
+        healthcheck:
+            test: ['CMD-SHELL', 'pgrep -f messenger:consume || exit 1']
+            interval: 30s
+            timeout: 5s
+            retries: 3
+            start_period: 30s
+
+    # -------------------------------------------------------------------
+    # Migration runner — one-shot. Runs `shopware-deployment-helper run`,
+    # which does plugin install/activate, migrations, theme compile, asset
+    # install, one-time tasks. Started explicitly by deploy.sh BEFORE the
+    # web rollout so failed migrations don't take the live site down.
+    # -------------------------------------------------------------------
+    migrate:
+        <<: *app-defaults
+        command: ["migrate"]
+        restart: "no"
+        profiles: ["deploy"]   # only started via `compose --profile deploy run`
+        depends_on:
+            db:    { condition: service_healthy, required: false }
+            redis: { condition: service_healthy, required: false }
+
+    # -------------------------------------------------------------------
+    # Cron — scheduled-task runner. Replaces the K8s CronJob. Loops every
+    # 5 minutes; lightweight enough to run as a long-running service.
+    # -------------------------------------------------------------------
+    cron:
+        <<: *app-defaults
+        command:
+            - sh
+            - -c
+            - |
+              while true; do
+                /usr/local/bin/shopware-entrypoint cron || true
+                sleep 300
+              done
+        healthcheck:
+            test: ['CMD-SHELL', 'pgrep -f scheduled-task:run || pgrep -f sleep']
+            interval: 60s
+            timeout: 5s
+            retries: 3
+
+    # -------------------------------------------------------------------
+    # OPTIONAL: in-stack MariaDB. Comment this whole block out if your
+    # hoster gives you a managed database and your DATABASE_URL points at it.
+    # -------------------------------------------------------------------
+    db:
+        image: mariadb:10.11
+        restart: unless-stopped
+        profiles: ["stateful"]   # only started when STATEFUL=stateful is set
+        environment:
+            MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+            MYSQL_DATABASE: ${MYSQL_DATABASE:-shopware}
+            MYSQL_USER: ${MYSQL_USER:-shopware}
+            MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+        command:
+            - --max_allowed_packet=1073741824
+            - --innodb_buffer_pool_size=${DB_BUFFER_POOL:-1G}
+        volumes:
+            - db_data:/var/lib/mysql
+        healthcheck:
+            test: ['CMD', 'mysqladmin', 'ping', '-uroot', '-p${MYSQL_ROOT_PASSWORD}', '--silent']
+            interval: 10s
+            timeout: 5s
+            retries: 12
+            start_period: 30s
+        logging:
+            driver: json-file
+            options: { max-size: '10m', max-file: '5' }
+
+    # -------------------------------------------------------------------
+    # OPTIONAL: in-stack Redis. Same logic as `db`.
+    # -------------------------------------------------------------------
+    redis:
+        image: redis:7-alpine
+        restart: unless-stopped
+        profiles: ["stateful"]
+        command:
+            - sh
+            - -c
+            - exec redis-server --requirepass "${REDIS_PASSWORD}" --maxmemory ${REDIS_MAXMEMORY:-1gb} --maxmemory-policy allkeys-lru
+        environment:
+            REDIS_PASSWORD: ${REDIS_PASSWORD}
+        volumes:
+            - redis_data:/data
+        healthcheck:
+            test: ['CMD-SHELL', 'redis-cli -a "$$REDIS_PASSWORD" ping | grep -q PONG']
+            interval: 10s
+            timeout: 5s
+            retries: 5
+
+    # -------------------------------------------------------------------
+    # OPTIONAL: OpenSearch + RabbitMQ — most managed-container hosters
+    # don't include these. Enable with `--profile stateful` if you run
+    # them on the same host.
+    # -------------------------------------------------------------------
+    opensearch:
+        image: opensearchproject/opensearch:2
+        restart: unless-stopped
+        profiles: ["stateful"]
+        environment:
+            - discovery.type=single-node
+            - plugins.security.disabled=true
+            - OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g
+        volumes:
+            - opensearch_data:/usr/share/opensearch/data
+        ulimits:
+            memlock: { soft: -1, hard: -1 }
+            nofile:  { soft: 65536, hard: 65536 }
+
+    rabbitmq:
+        image: rabbitmq:4-management
+        restart: unless-stopped
+        profiles: ["stateful"]
+        environment:
+            RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-shopware}
+            RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+        volumes:
+            - rabbitmq_data:/var/lib/rabbitmq
+        healthcheck:
+            test: ['CMD', 'rabbitmq-diagnostics', 'check_running']
+            interval: 10s
+            timeout: 5s
+            retries: 5
+
+volumes:
+    shopware_media:
+    shopware_thumbnail:
+    shopware_theme:
+    shopware_sitemap:
+    shopware_bundles:
+    shopware_files:
+    shopware_logs:
+    db_data:
+    redis_data:
+    opensearch_data:
+    rabbitmq_data:

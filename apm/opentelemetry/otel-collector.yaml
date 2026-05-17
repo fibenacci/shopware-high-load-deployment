@@ -1,0 +1,76 @@
+# OpenTelemetry Collector — receives traces / metrics / logs from the Shopware
+# pods over OTLP, fans them out to Tempo (traces), Prometheus (remote write
+# for metrics), and Loki (logs).
+
+receivers:
+    otlp:
+        protocols:
+            grpc: { endpoint: 0.0.0.0:4317 }
+            http: { endpoint: 0.0.0.0:4318 }
+
+    # Optional — scrape PHP-FPM exporters directly so the Collector can
+    # tag spans with FPM saturation. Disable if you already use Prometheus
+    # as the only scraper.
+    # prometheus:
+    #     config:
+    #         scrape_configs:
+    #             - job_name: php-fpm
+    #               static_configs:
+    #                   - targets: [shopware-web.shopware-staging:9253]
+
+processors:
+    batch:
+        timeout: 5s
+        send_batch_size: 1024
+        send_batch_max_size: 2048
+    memory_limiter:
+        check_interval: 1s
+        limit_percentage: 80
+        spike_limit_percentage: 25
+    resource:
+        attributes:
+            - { key: service.namespace, value: shopware, action: upsert }
+    tail_sampling:
+        decision_wait: 30s
+        num_traces: 50000
+        policies:
+            - { name: errors,    type: status_code, status_code: { status_codes: [ERROR] } }
+            - { name: slow,      type: latency,     latency:    { threshold_ms: 1000 } }
+            - { name: sample-5,  type: probabilistic, probabilistic: { sampling_percentage: 5 } }
+
+exporters:
+    otlp/tempo:
+        endpoint: tempo.observability:4317
+        tls: { insecure: true }
+
+    prometheusremotewrite:
+        endpoint: http://kube-prometheus-stack-prometheus.observability:9090/api/v1/write
+        tls: { insecure: true }
+
+    loki:
+        endpoint: http://loki.observability:3100/loki/api/v1/push
+
+    debug:
+        verbosity: basic
+
+extensions:
+    health_check: { endpoint: 0.0.0.0:13133 }
+    pprof:        { endpoint: 0.0.0.0:1777 }
+
+service:
+    extensions: [health_check, pprof]
+    telemetry:
+        metrics: { address: 0.0.0.0:8888 }
+    pipelines:
+        traces:
+            receivers:  [otlp]
+            processors: [memory_limiter, resource, tail_sampling, batch]
+            exporters:  [otlp/tempo]
+        metrics:
+            receivers:  [otlp]
+            processors: [memory_limiter, resource, batch]
+            exporters:  [prometheusremotewrite]
+        logs:
+            receivers:  [otlp]
+            processors: [memory_limiter, resource, batch]
+            exporters:  [loki]

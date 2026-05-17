@@ -1,0 +1,60 @@
+# CODEOWNERS — assigns automatic review requests + branch-protection signers.
+#
+# Format: <pattern> @owner1 @owner2 / @team-handle
+# First matching rule wins; place the most specific patterns last.
+#
+# Replace every TODO before adopting in your team. Until then, GitHub treats
+# the file as syntactically valid but with zero effective ownership.
+#
+# Reference: https://docs.github.com/repositories/managing-your-repositorys-settings-and-security/customizing-your-repository/about-code-owners
+
+# ----- Default ----------------------------------------------------------------
+# Anything not otherwise claimed falls back to the platform team.
+*                                       # TODO: @your-org/platform-team
+
+# ----- Infrastructure as code -------------------------------------------------
+/k8s/                                   # TODO: @your-org/platform-team @your-org/sre
+/k3s/                                   # TODO: @your-org/platform-team @your-org/sre
+/monitoring/                            # TODO: @your-org/platform-team @your-org/sre
+/deploy/                                # TODO: @your-org/platform-team @your-org/sre
+/docker/                                # TODO: @your-org/platform-team
+deployment.config                       # TODO: @your-org/platform-team @your-org/security
+
+# ----- Security-sensitive files (require security review) ---------------------
+# Anything touching secrets, rate limits, network policies, image scanning
+# should trigger a second review pair of eyes.
+/.github/workflows/                     # TODO: @your-org/security @your-org/platform-team
+/k8s/base/secret.yaml                   # TODO: @your-org/security
+/k8s/base/networkpolicy.yaml            # TODO: @your-org/security @your-org/sre
+/k8s/base/ingress.yaml                  # TODO: @your-org/security @your-org/sre
+/k8s/base/cronjob-backup.yaml           # TODO: @your-org/security @your-org/sre
+/k8s/base/cronjob-restore-drill.yaml    # TODO: @your-org/security @your-org/sre
+/.trivyignore                           # TODO: @your-org/security
+/docs/secrets.md                        # TODO: @your-org/security
+/docs/security.md                       # TODO: @your-org/security
+
+# ----- Shop code --------------------------------------------------------------
+/src/                                   # TODO: @your-org/shop-backend
+/custom/plugins/                        # TODO: @your-org/shop-backend
+/custom/static-plugins/                 # TODO: @your-org/shop-backend
+/config/                                # TODO: @your-org/shop-backend
+composer.json                           # TODO: @your-org/shop-backend
+composer.lock                           # TODO: @your-org/shop-backend
+
+# ----- Frontend / theme -------------------------------------------------------
+# Adapt these patterns once your theme lives under custom/static-plugins/.
+# /custom/static-plugins/MyTheme/        # TODO: @your-org/shop-frontend
+
+# ----- Tests ------------------------------------------------------------------
+/tests/                                 # TODO: @your-org/qa @your-org/shop-backend
+/tests/e2e/                             # TODO: @your-org/qa
+
+# ----- Docs -------------------------------------------------------------------
+# Docs ownership is usually distributed — let everyone touch them without a
+# review block, but require docs review on the architecture-level pages.
+/docs/architecture.md                   # TODO: @your-org/platform-team
+/docs/deployment.md                     # TODO: @your-org/platform-team
+/README.md                              # TODO: @your-org/platform-team
+
+# ----- Misc -------------------------------------------------------------------
+/Makefile                               # TODO: @your-org/platform-team

@@ -1,0 +1,19 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+    name: shopware-web
+    annotations:
+        cert-manager.io/cluster-issuer: letsencrypt-staging
+spec:
+    tls:
+        - { hosts: [staging.shop.example.com], secretName: shop-tls }
+    rules:
+        - host: staging.shop.example.com
+          http:
+              paths:
+                  - path: /
+                    pathType: Prefix
+                    backend:
+                        service:
+                            name: shopware-web
+                            port: { name: http }

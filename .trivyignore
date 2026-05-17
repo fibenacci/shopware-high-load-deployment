@@ -1,0 +1,12 @@
+# Project-specific Trivy allowlist.
+#
+# Format: one CVE per line. Add an inline comment explaining WHY each entry
+# is here (when does the exception expire? which upstream fix are we waiting
+# for? is it dev-only?). Otherwise this file rots into a noise filter.
+#
+# Re-audit at least quarterly. Empty entries with no comment will be removed
+# by the security review.
+#
+# Examples:
+# CVE-2024-12345  # symfony/http-foundation — fixed in 6.4.7; waiting for the
+#                 # Shopware update wave (target: 2026-Q2).

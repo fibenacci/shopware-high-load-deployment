@@ -1,0 +1,145 @@
+{
+    "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+    "extends": [
+        "config:recommended",
+        "schedule:weekly",
+        ":semanticCommitTypeAll(deps)",
+        "group:monorepos",
+        "group:recommended"
+    ],
+    "timezone": "Europe/Berlin",
+    "labels": ["dependencies"],
+    "prConcurrentLimit": 5,
+    "prHourlyLimit": 2,
+    "rangeStrategy": "bump",
+    "dependencyDashboard": true,
+
+    "vulnerabilityAlerts": {
+        "labels": ["dependencies", "security"],
+        "minimumReleaseAge": null,
+        "prCreation": "immediate",
+        "schedule": [],
+        "automerge": false
+    },
+
+    "packageRules": [
+        {
+            "description": "Shopware core stays one PR. Major bumps are a project — open them but DO NOT auto-merge.",
+            "matchPackagePatterns": ["^shopware/"],
+            "groupName": "shopware",
+            "labels": ["dependencies", "shopware"],
+            "schedule": ["before 6am on monday"],
+            "automerge": false,
+            "minimumReleaseAge": "3 days"
+        },
+        {
+            "description": "Symfony — group, auto-merge patch only (skip minor/major auto-merge; Shopware is sensitive).",
+            "matchPackagePatterns": ["^symfony/"],
+            "groupName": "symfony",
+            "matchUpdateTypes": ["patch"],
+            "automerge": true,
+            "minimumReleaseAge": "3 days"
+        },
+        {
+            "description": "Doctrine — group, auto-merge patch.",
+            "matchPackagePatterns": ["^doctrine/"],
+            "groupName": "doctrine",
+            "matchUpdateTypes": ["patch"],
+            "automerge": true,
+            "minimumReleaseAge": "3 days"
+        },
+        {
+            "description": "Dev dependencies — auto-merge patch + minor, they only run in CI.",
+            "matchDepTypes": ["require-dev", "devDependencies"],
+            "matchUpdateTypes": ["patch", "minor"],
+            "automerge": true,
+            "minimumReleaseAge": "3 days"
+        },
+        {
+            "description": "Docker base images — pin to digest, monthly bump.",
+            "matchDatasources": ["docker"],
+            "pinDigests": true,
+            "schedule": ["before 6am on the first day of the month"]
+        },
+        {
+            "description": "Shopware-supplied Docker images — same cadence as the rest of shopware/* group.",
+            "matchDatasources": ["docker"],
+            "matchPackagePatterns": ["^ghcr\\.io/shopware/", "^shopware/"],
+            "groupName": "shopware",
+            "schedule": ["before 6am on monday"],
+            "automerge": false
+        },
+        {
+            "description": "GitHub Actions — pin to SHA (security), bump weekly. Auto-merge passing patch/minor.",
+            "matchManagers": ["github-actions"],
+            "pinDigests": true,
+            "matchUpdateTypes": ["patch", "minor"],
+            "automerge": true
+        },
+        {
+            "description": "Playwright — wait a week for fresh majors (they sometimes break browsers).",
+            "matchPackageNames": ["@playwright/test"],
+            "minimumReleaseAge": "7 days",
+            "matchUpdateTypes": ["major"],
+            "automerge": false
+        }
+    ],
+
+    "composer": {
+        "enabled": true,
+        "fileMatch": ["composer\\.json$"]
+    },
+    "npm": {
+        "enabled": true,
+        "fileMatch": ["package\\.json$"]
+    },
+    "docker": {
+        "enabled": true
+    },
+    "github-actions": {
+        "enabled": true
+    },
+
+    "ignorePaths": [
+        "**/node_modules/**",
+        "**/vendor/**",
+        ".build/**",
+        "var/**"
+    ],
+
+    "customManagers": [
+        {
+            "description": "Track SHOPWARE_VERSION in deployment.config — this is THE source of truth. When Renovate proposes a bump here, CI's composer-json-check fails until `make composer-json` re-renders composer.json. The two move together by design.",
+            "customType": "regex",
+            "fileMatch": ["^deployment\\.config$"],
+            "matchStrings": [
+                "SHOPWARE_VERSION=(?<currentValue>[\\d.]+)"
+            ],
+            "datasourceTemplate": "packagist",
+            "depNameTemplate": "shopware/core",
+            "versioningTemplate": "composer"
+        },
+        {
+            "description": "Track PHP_VERSION in deployment.config.",
+            "customType": "regex",
+            "fileMatch": ["^deployment\\.config$"],
+            "matchStrings": [
+                "PHP_VERSION=(?<currentValue>[\\d.]+)"
+            ],
+            "datasourceTemplate": "docker",
+            "depNameTemplate": "php",
+            "versioningTemplate": "docker"
+        },
+        {
+            "description": "Track NODE_VERSION in deployment.config.",
+            "customType": "regex",
+            "fileMatch": ["^deployment\\.config$"],
+            "matchStrings": [
+                "NODE_VERSION=(?<currentValue>[\\d.]+)"
+            ],
+            "datasourceTemplate": "docker",
+            "depNameTemplate": "node",
+            "versioningTemplate": "docker"
+        }
+    ]
+}

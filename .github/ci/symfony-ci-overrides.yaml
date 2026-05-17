@@ -1,0 +1,21 @@
+# CI-only Symfony config drop-in.
+#
+# Loaded at /var/www/html/config/packages/zz-ci-overrides.yaml by the image
+# build. The `zz-` prefix guarantees this file is loaded LAST by Symfony's
+# alphabetical loader, so it wins over framework.yaml + redis.yaml.
+#
+# Result: under any APP_ENV, the kernel uses filesystem cache, mock-file
+# sessions, and sync messenger transports — no Redis / RabbitMQ sidecars
+# required to boot the storefront.
+framework:
+    cache:
+        app: cache.adapter.filesystem
+        system: cache.adapter.filesystem
+    session:
+        storage_factory_id: session.storage.factory.mock_file
+    messenger:
+        transports:
+            async: 'sync://'
+            low_priority: 'sync://'
+            failed: 'sync://'
+            doctrine: 'sync://'

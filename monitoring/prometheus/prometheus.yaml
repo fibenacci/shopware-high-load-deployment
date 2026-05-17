@@ -1,0 +1,42 @@
+global:
+    scrape_interval: 15s
+    evaluation_interval: 15s
+    external_labels:
+        cluster: local
+        stack: shopware
+
+rule_files:
+    - /etc/prometheus/alerts.yaml
+
+scrape_configs:
+    - job_name: prometheus
+      static_configs:
+          - targets: ["localhost:9090"]
+
+    - job_name: node-exporter
+      static_configs:
+          - targets: ["node-exporter:9100"]
+
+    - job_name: cadvisor
+      static_configs:
+          - targets: ["cadvisor:8080"]
+
+    # PHP-FPM metrics — produced by the in-pod exporter sidecar (k8s) or the
+    # local exporter you wire in compose. Disabled by default in local dev.
+    - job_name: php-fpm
+      static_configs:
+          - targets: []
+      relabel_configs:
+          - { source_labels: [__address__], target_label: instance }
+
+    # Nginx stub_status — scraped via nginx-prometheus-exporter, deployed
+    # next to nginx in prod. Local dev relies on stdout JSON access logs
+    # (Loki) so this scrape config is intentionally empty here.
+    - job_name: nginx
+      static_configs:
+          - targets: []
+
+    # OTel Collector internal metrics
+    - job_name: otel-collector
+      static_configs:
+          - targets: ["otel-collector:8888"]

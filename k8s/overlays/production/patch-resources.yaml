@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+    name: shopware-web
+spec:
+    template:
+        spec:
+            containers:
+                - name: shopware
+                  resources:
+                      requests: { cpu: 500m, memory: 1Gi }
+                      limits:   { cpu: 3,    memory: 2Gi }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+    name: shopware-worker
+spec:
+    template:
+        spec:
+            containers:
+                - name: worker
+                  resources:
+                      requests: { cpu: 250m, memory: 512Mi }
+                      limits:   { cpu: 2,    memory: 1.5Gi }

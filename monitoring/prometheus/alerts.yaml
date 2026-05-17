@@ -1,0 +1,73 @@
+groups:
+    - name: shopware-availability
+      rules:
+          - alert: ShopwareWebUnavailable
+            expr: |
+                (sum by (instance) (rate(nginx_http_requests_total{job="nginx"}[5m])) == 0)
+                or absent(up{job="php-fpm"} == 1)
+            for: 3m
+            labels:
+                severity: critical
+            annotations:
+                summary: "Shopware web is not serving requests"
+                description: "No nginx requests or no healthy PHP-FPM target for 3 minutes."
+
+          - alert: ShopwareHigh5xxRate
+            expr: |
+                sum(rate(nginx_http_requests_total{status=~"5.."}[5m]))
+                /
+                sum(rate(nginx_http_requests_total[5m])) > 0.02
+            for: 5m
+            labels: { severity: warning }
+            annotations:
+                summary: "5xx rate above 2% (current: {{ $value | humanizePercentage }})"
+
+          - alert: ShopwareHighRequestLatency
+            expr: |
+                histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket[5m]))) > 2
+            for: 10m
+            labels: { severity: warning }
+            annotations:
+                summary: "p95 request latency above 2s (current: {{ $value }}s)"
+
+    - name: shopware-php-fpm
+      rules:
+          - alert: PhpFpmSaturated
+            expr: |
+                phpfpm_active_processes / phpfpm_total_processes > 0.85
+            for: 5m
+            labels: { severity: warning }
+            annotations:
+                summary: "PHP-FPM pool saturated ({{ $value | humanizePercentage }} used)"
+                description: "Consider scaling out or raising pm.max_children."
+
+          - alert: PhpFpmMaxChildrenReached
+            expr: rate(phpfpm_max_children_reached[10m]) > 0
+            for: 5m
+            labels: { severity: critical }
+            annotations:
+                summary: "pm.max_children reached — requests are queuing"
+
+    - name: shopware-infrastructure
+      rules:
+          - alert: MariaDBConnectionsHigh
+            expr: mysql_global_status_threads_connected / mysql_global_variables_max_connections > 0.8
+            for: 10m
+            labels: { severity: warning }
+            annotations:
+                summary: "MariaDB connections > 80% of max"
+
+          - alert: RedisHighMemory
+            expr: redis_memory_used_bytes / redis_memory_max_bytes > 0.85
+            for: 10m
+            labels: { severity: warning }
+            annotations:
+                summary: "Redis memory > 85% — LRU evictions imminent"
+
+          - alert: RabbitMQQueueBacklog
+            expr: rabbitmq_queue_messages_ready > 5000
+            for: 10m
+            labels: { severity: warning }
+            annotations:
+                summary: "RabbitMQ backlog growing ({{ $value }} ready msgs)"
+                description: "Messenger workers can't keep up — scale shopware-worker."

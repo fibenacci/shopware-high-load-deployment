@@ -1,0 +1,96 @@
+name: Bug report
+description: Something is broken or behaves wrong
+title: "[bug] "
+labels: ["bug", "triage"]
+body:
+    -   type: markdown
+        attributes:
+            value: |
+                Thanks for taking the time to report a bug. The more concretely you describe what
+                happened, the faster we can fix it. **For security issues, use [Security Advisories](../security/advisories/new) — not this form.**
+
+    -   type: textarea
+        id: what-happened
+        attributes:
+            label: What happened
+            description: One paragraph. The observable behaviour, not your interpretation of it.
+            placeholder: |
+                Clicking "Add to cart" on the product detail page shows a 500 error in the
+                browser console; the cart counter doesn't update.
+        validations:
+            required: true
+
+    -   type: textarea
+        id: expected
+        attributes:
+            label: What you expected
+            description: What should have happened instead?
+            placeholder: |
+                Cart counter should increment and the off-canvas cart should slide in.
+        validations:
+            required: true
+
+    -   type: textarea
+        id: reproduce
+        attributes:
+            label: How to reproduce
+            description: |
+                Steps from a known starting state. Include URLs, payloads, screen captures
+                where useful. "It happens sometimes" is not reproducible.
+            placeholder: |
+                1. `make up`
+                2. Open http://shop.docker
+                3. Click any product
+                4. Click "Add to cart"
+                5. Observe 500 in network panel
+        validations:
+            required: true
+
+    -   type: dropdown
+        id: where
+        attributes:
+            label: Which deployment mode
+            options:
+                - "Local docker (DEPLOYMENT_MODE=docker)"
+                - "Kubernetes"
+                - "Managed-container (TimmeHosting / Hetzner / DO)"
+                - "Bare-metal"
+                - "CI (.github/workflows/)"
+                - "Not deployment-related"
+        validations:
+            required: true
+
+    -   type: input
+        id: shopware-version
+        attributes:
+            label: Shopware version
+            description: From `deployment.config` → `SHOPWARE_VERSION`
+            placeholder: "6.6.5.1"
+        validations:
+            required: true
+
+    -   type: input
+        id: template-version
+        attributes:
+            label: Template version / commit
+            description: From `git describe --tags --always` (run `make config` to confirm)
+            placeholder: "v0.3.1 or commit SHA"
+
+    -   type: textarea
+        id: logs
+        attributes:
+            label: Relevant logs / error messages
+            description: |
+                Paste relevant output — `make logs`, `kubectl logs ...`, browser console.
+                Trim to the relevant 20-50 lines. Use code fences.
+            render: shell
+
+    -   type: checkboxes
+        id: checks
+        attributes:
+            label: Pre-submission checks
+            options:
+                -   label: I checked existing issues for duplicates
+                    required: true
+                -   label: I redacted any secrets / customer data from the logs
+                    required: true

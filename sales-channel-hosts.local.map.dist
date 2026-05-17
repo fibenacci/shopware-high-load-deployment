@@ -1,0 +1,9 @@
+# Map Shopware sales-channel IDs (or names) to local dev hostnames.
+# Used by docker/scripts/apply-sales-channel-domains.sh.
+#
+# Format: <sales-channel-name-or-id>=<scheme>://<hostname>
+#
+# Examples:
+# main=http://shop.docker
+# de=http://de.shop.docker
+# en=http://en.shop.docker

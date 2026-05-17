@@ -1,0 +1,10 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+    name: shopware-web
+spec:
+    minAvailable: 1
+    selector:
+        matchLabels:
+            app.kubernetes.io/name: shopware
+            app.kubernetes.io/component: web

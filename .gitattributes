@@ -1,0 +1,112 @@
+# Normalise line endings + tell git which files are text vs binary +
+# pick merge strategies for files that conflict often.
+#
+# Reference: https://git-scm.com/docs/gitattributes
+
+# ----- Default: auto-detect, but normalise text to LF on commit ----------
+*           text=auto eol=lf
+
+# ----- Explicit text files (LF always, regardless of OS) -----------------
+*.php       text eol=lf
+*.js        text eol=lf
+*.mjs       text eol=lf
+*.cjs       text eol=lf
+*.ts        text eol=lf
+*.tsx       text eol=lf
+*.vue       text eol=lf
+*.css       text eol=lf
+*.scss      text eol=lf
+*.html      text eol=lf
+*.htm       text eol=lf
+*.twig      text eol=lf
+*.json      text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.toml      text eol=lf
+*.xml       text eol=lf
+*.md        text eol=lf
+*.txt       text eol=lf
+*.sh        text eol=lf
+*.bash      text eol=lf
+*.env       text eol=lf
+*.env.*     text eol=lf
+
+Dockerfile          text eol=lf
+docker-entrypoint.sh text eol=lf
+Makefile            text eol=lf
+*.mk                text eol=lf
+
+# ----- Binary files (never line-ending munge, never diff inline) ---------
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.gif       binary
+*.webp      binary
+*.ico       binary
+*.svg       text eol=lf
+*.pdf       binary
+*.zip       binary
+*.gz        binary
+*.tar       binary
+*.bz2       binary
+*.7z        binary
+*.woff      binary
+*.woff2     binary
+*.ttf       binary
+*.otf       binary
+*.eot       binary
+*.mp4       binary
+*.mp3       binary
+*.webm      binary
+*.sql.gz    binary
+*.dump      binary
+*.enc       binary
+
+# ----- Lock files — keep upstream LF, never normalise ---------------------
+composer.lock      text eol=lf merge=ours
+package-lock.json  text eol=lf merge=ours
+yarn.lock          text eol=lf merge=ours
+
+# composer.lock conflicts during rebase are almost always "both branches
+# bumped some deps". `merge=ours` resolves to "ours" so the rebaser
+# decides instead of resolving line-by-line. Re-run `composer install`
+# (or `composer update <specific-package>`) right after to regenerate
+# the lock cleanly.
+
+# ----- linguist hints — don't let GitHub mis-classify the repo ------------
+# Mark vendored / generated paths so they don't count toward language
+# stats and don't appear in PR diffs by default.
+vendor/**                 linguist-vendored
+node_modules/**           linguist-vendored
+**/Resources/public/**    linguist-generated
+**/var/cache/**           linguist-generated
+**/build/**               linguist-generated
+**/dist/**                linguist-generated
+public/bundles/**         linguist-generated
+public/theme/**           linguist-generated
+public/media/**           linguist-generated
+public/thumbnail/**       linguist-generated
+
+# Test-only data — exclude from diff stats so PRs about "real" code stay readable.
+tests/Fixtures/data/**    linguist-detectable=false
+
+# ----- export-ignore — exclude from `git archive` / composer download ----
+.github/             export-ignore
+.githooks/           export-ignore
+.claude/             export-ignore
+tests/               export-ignore
+docs/                export-ignore
+deploy/              export-ignore
+k8s/                 export-ignore
+k3s/                 export-ignore
+monitoring/          export-ignore
+apm/                 export-ignore
+.editorconfig        export-ignore
+.gitattributes       export-ignore
+.gitignore           export-ignore
+.trivyignore         export-ignore
+.rsyncexclude        export-ignore
+CONTRIBUTING.md      export-ignore
+SECURITY.md          export-ignore
+CLAUDE.md            export-ignore
+phpunit.xml.dist     export-ignore

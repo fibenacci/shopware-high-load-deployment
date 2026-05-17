@@ -1,0 +1,41 @@
+# Loaded only when APP_ENV=staging — gated by the `when@staging:` block
+# below. Drives Shopware's built-in staging mode:
+#   bin/console system:setup:staging
+#
+# Reference:
+#   https://developer.shopware.com/docs/guides/hosting/installation-updates/creating-a-staging-instance.html
+#
+# What `system:setup:staging` does automatically:
+#   • Deletes apps with external service connections (sandbox-safety)
+#   • Disables email delivery
+#   • Resets instance IDs
+#   • Rewrites sales-channel URLs per the rules below
+
+when@staging:
+    shopware:
+        staging:
+            mailing:
+                # Renamed in Shopware 6.6 — old name was `disabled`.
+                disable_delivery: true
+            storefront:
+                show_banner: true
+            administration:
+                show_banner: true
+
+            # Rewrite production URLs → staging URLs. The deploy pipeline
+            # runs `system:setup:staging` after the deployment-helper, which
+            # applies these rules to sales_channel_domain rows.
+            sales_channel_url:
+                rules:
+                    # Replace every occurrence of <prod-host> with <staging-host>.
+                    # Supports `equal`, `prefix`, and `regex` matchers.
+                    - type: prefix
+                      match: 'https://shop.example.com'
+                      replace: 'https://staging.shop.example.com'
+                    - type: prefix
+                      match: 'https://www.shop.example.com'
+                      replace: 'https://staging.shop.example.com'
+
+            # Custom data hooks — handled by the SetupStagingEvent listener
+            # if the project ships one. Default: no-op.
+            # https://developer.shopware.com/docs/concepts/framework/event-system.html

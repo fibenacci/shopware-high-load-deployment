@@ -1,0 +1,63 @@
+name: Feature request
+description: Suggest a capability the template should have
+title: "[feature] "
+labels: ["enhancement", "triage"]
+body:
+    -   type: markdown
+        attributes:
+            value: |
+                For story-level work (one-shop features), use `/new-story` in Claude Code or
+                manually copy `docs/user-story-template.md`. This form is for *template*
+                features — things that benefit every adopter, not your specific shop.
+
+    -   type: textarea
+        id: problem
+        attributes:
+            label: Problem
+            description: |
+                What pain are you experiencing today? Describe the situation, not the
+                solution you're imagining.
+            placeholder: |
+                When I deploy to bare-metal, I have to manually run database:migrate after
+                rsync. The deployment-helper handles it for managed-container and k8s, but
+                not for bare-metal where shopware-cli isn't available.
+        validations:
+            required: true
+
+    -   type: textarea
+        id: proposed
+        attributes:
+            label: Proposed solution
+            description: |
+                What would solve it? Be specific enough to be evaluable. "Make it better"
+                is not a proposal.
+            placeholder: |
+                Add a Makefile target `make migrate-remote ENV=...` that SSHes to the
+                bare-metal host and runs `bin/console database:migrate --all`. Wire it
+                into `make deploy` post-rsync.
+        validations:
+            required: true
+
+    -   type: textarea
+        id: alternatives
+        attributes:
+            label: Alternatives considered
+            description: What did you already try / consider that didn't work?
+
+    -   type: dropdown
+        id: scope
+        attributes:
+            label: Who benefits
+            options:
+                - "Every adopter of this template"
+                - "Adopters using a specific deployment mode"
+                - "Just my team — but maybe others have the same problem"
+                - "Not sure"
+        validations:
+            required: true
+
+    -   type: textarea
+        id: workaround
+        attributes:
+            label: Current workaround
+            description: How are you doing it today? (If "I can't" — say that.)

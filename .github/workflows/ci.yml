@@ -1,0 +1,582 @@
+name: Shopware CI
+
+on:
+    pull_request:
+    push:
+        branches: [main]
+    workflow_dispatch:
+
+concurrency:
+    group: ci-${{ github.ref }}
+    cancel-in-progress: true
+
+# `env` is set per-job below by sourcing deployment.config. The repo-level
+# defaults here are only used by jobs that don't run the config-loader step.
+env:
+    SHOPWARE_DEPLOYMENT_CONFIG: deployment.config
+
+jobs:
+    # -----------------------------------------------------------------
+    # Read deployment.config once; downstream jobs receive the resolved
+    # version pins via the `outputs` API. Saves every job from repeating
+    # the same shell snippet.
+    # -----------------------------------------------------------------
+    config:
+        name: Load global config
+        runs-on: ubuntu-latest
+        outputs:
+            php_version:      ${{ steps.cfg.outputs.PHP_VERSION }}
+            node_version:     ${{ steps.cfg.outputs.NODE_VERSION }}
+            shopware_version: ${{ steps.cfg.outputs.SHOPWARE_VERSION }}
+            deployment_mode:  ${{ steps.cfg.outputs.DEPLOYMENT_MODE }}
+            image_app:        ${{ steps.cfg.outputs.IMAGE_APP }}
+            image_worker:     ${{ steps.cfg.outputs.IMAGE_WORKER }}
+            tideways_enable:  ${{ steps.cfg.outputs.TIDEWAYS_ENABLE }}
+            tideways_version: ${{ steps.cfg.outputs.TIDEWAYS_VERSION }}
+        steps:
+            -   uses: actions/checkout@v4
+            -   id: cfg
+                run: |
+                    set -a
+                    . ./deployment.config
+                    set +a
+                    {
+                        echo "PHP_VERSION=$PHP_VERSION"
+                        echo "NODE_VERSION=$NODE_VERSION"
+                        echo "SHOPWARE_VERSION=$SHOPWARE_VERSION"
+                        echo "DEPLOYMENT_MODE=$DEPLOYMENT_MODE"
+                        echo "IMAGE_APP=$IMAGE_APP"
+                        echo "IMAGE_WORKER=$IMAGE_WORKER"
+                        echo "TIDEWAYS_ENABLE=$TIDEWAYS_ENABLE"
+                        echo "TIDEWAYS_VERSION=$TIDEWAYS_VERSION"
+                    } >> "$GITHUB_OUTPUT"
+
+            -   name: composer.json in sync with deployment.config
+                # Catches the "I bumped SHOPWARE_VERSION but forgot to
+                # re-render composer.json" mistake before any other job
+                # wastes time. Fix: `make composer-json` + commit.
+                run: ./scripts/render-composer.sh --check
+
+            -   name: Install verify-tier tooling
+                run: |
+                    sudo apt-get update -qq
+                    sudo apt-get install -y -qq shellcheck jq
+                    # actionlint single-binary install
+                    bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash) latest /usr/local/bin
+                    # yq via go install path or apt — apt is faster
+                    sudo snap install yq 2>/dev/null || sudo apt-get install -y -qq yq || true
+
+            -   name: make verify (Tier 1 static checks)
+                run: make verify
+
+    # -----------------------------------------------------------------
+    # Secret scan — catches committed credentials, API keys, tokens.
+    # Runs in parallel with the other static checks.
+    # -----------------------------------------------------------------
+    secrets-scan:
+        name: Secret scan (gitleaks)
+        needs: config
+        runs-on: ubuntu-latest
+        timeout-minutes: 5
+        steps:
+            -   uses: actions/checkout@v4
+                with: { fetch-depth: 0 }
+            -   uses: gitleaks/gitleaks-action@v2
+                env:
+                    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    # -----------------------------------------------------------------
+    # Fast static checks — run in parallel, no docker / no shopware boot.
+    # These have to be green before the heavy `tests` job kicks off so
+    # red feedback arrives in minutes, not after the 30 min E2E run.
+    # -----------------------------------------------------------------
+    quality:
+        name: Static Quality
+        needs: config
+        runs-on: ubuntu-latest
+        timeout-minutes: 15
+        env:
+            PHP_VERSION:  ${{ needs.config.outputs.php_version }}
+            NODE_VERSION: ${{ needs.config.outputs.node_version }}
+        steps:
+            -   uses: actions/checkout@v4
+            -   uses: shivammathur/setup-php@v2
+                with:
+                    php-version: ${{ env.PHP_VERSION }}
+                    tools: composer:v2
+                    coverage: none
+            -   uses: actions/cache@v4
+                with:
+                    path: ~/.composer/cache
+                    key: composer-${{ runner.os }}-${{ hashFiles('composer.lock') }}
+                    restore-keys: composer-${{ runner.os }}-
+            -   name: composer install
+                env:
+                    COMPOSER_AUTH: '{"github-oauth":{"github.com":"${{ secrets.COMPOSER_AUTH_TOKEN }}"},"bearer":{"packages.shopware.com":"${{ secrets.SHOPWARE_PACKAGES_TOKEN }}"}}'
+                run: composer install --no-interaction --prefer-dist --no-progress --no-scripts
+            -   name: PHP-CS-Fixer (dry-run)
+                run: vendor/bin/php-cs-fixer fix --config=.build/php-cs-fixer.php --allow-risky=yes --dry-run --diff --using-cache=no custom/static-plugins
+            -   name: PHPStan
+                run: vendor/bin/phpstan analyse --configuration=.build/phpstan.neon --memory-limit=1G
+
+    lint:
+        name: JS/TS Lint
+        needs: config
+        runs-on: ubuntu-latest
+        timeout-minutes: 10
+        env:
+            NODE_VERSION: ${{ needs.config.outputs.node_version }}
+        steps:
+            -   uses: actions/checkout@v4
+            -   uses: actions/setup-node@v4
+                with:
+                    node-version: ${{ env.NODE_VERSION }}
+                    cache: npm
+                    cache-dependency-path: tests/e2e/package-lock.json
+            -   name: Install e2e deps
+                working-directory: tests/e2e
+                run: npm ci
+            -   name: tsc on e2e
+                working-directory: tests/e2e
+                run: npx tsc --noEmit
+
+    audit:
+        name: Dependency Audit
+        needs: config
+        runs-on: ubuntu-latest
+        timeout-minutes: 10
+        env:
+            PHP_VERSION:  ${{ needs.config.outputs.php_version }}
+            NODE_VERSION: ${{ needs.config.outputs.node_version }}
+        steps:
+            -   uses: actions/checkout@v4
+            -   uses: shivammathur/setup-php@v2
+                with:
+                    php-version: ${{ env.PHP_VERSION }}
+                    tools: composer:v2
+                    coverage: none
+            -   uses: actions/setup-node@v4
+                with:
+                    node-version: ${{ env.NODE_VERSION }}
+            -   id: composer_audit
+                continue-on-error: true
+                env:
+                    COMPOSER_AUTH: '{"github-oauth":{"github.com":"${{ secrets.COMPOSER_AUTH_TOKEN }}"},"bearer":{"packages.shopware.com":"${{ secrets.SHOPWARE_PACKAGES_TOKEN }}"}}'
+                run: composer audit --locked --format=plain --abandoned=ignore
+            -   id: npm_audit
+                continue-on-error: true
+                working-directory: tests/e2e
+                run: npm audit --audit-level=high
+            -   name: Gate
+                if: always()
+                env:
+                    NPM: ${{ steps.npm_audit.outcome }}
+                run: |
+                    if [ "$NPM" = "failure" ]; then
+                        echo "::error::npm advisories found — see audit step."
+                        exit 1
+                    fi
+
+    shopware-validate:
+        name: Shopware Extension Validate
+        needs: config
+        runs-on: ubuntu-latest
+        timeout-minutes: 10
+        steps:
+            -   uses: actions/checkout@v4
+            -   uses: shopware/shopware-cli-action@v3
+            -   name: Validate plugins
+                run: |
+                    failed=0
+                    for dir in custom/static-plugins/*/ custom/plugins/*/; do
+                        dir=${dir%/}
+                        [ -f "$dir/composer.json" ] || [ -f "$dir/manifest.xml" ] || continue
+                        echo "::group::shopware-cli extension validate $dir"
+                        shopware-cli extension validate "$dir" || failed=1
+                        echo "::endgroup::"
+                    done
+                    exit "$failed"
+
+    # -----------------------------------------------------------------
+    # Heavy tests — single pre-baked CI container, no bind mounts.
+    # -----------------------------------------------------------------
+    tests:
+        name: PHPUnit + Playwright
+        needs: [config, quality, lint, shopware-validate, secrets-scan]
+        runs-on: ubuntu-latest
+        timeout-minutes: 45
+        env:
+            COMPOSE_PROJECT_NAME: shopware-ci
+            STOREFRONT_PORT: '8080'
+            NODE_VERSION: ${{ needs.config.outputs.node_version }}
+        steps:
+            -   uses: actions/checkout@v4
+            -   uses: actions/setup-node@v4
+                with:
+                    node-version: ${{ env.NODE_VERSION }}
+                    cache: npm
+                    cache-dependency-path: tests/e2e/package-lock.json
+            -   uses: actions/cache@v4
+                with:
+                    path: ~/.cache/ms-playwright
+                    key: playwright-${{ runner.os }}-${{ hashFiles('tests/e2e/package-lock.json') }}
+            -   name: Bootstrap CI stack
+                env:
+                    COMPOSER_AUTH: '{"github-oauth":{"github.com":"${{ secrets.COMPOSER_AUTH_TOKEN }}"},"bearer":{"packages.shopware.com":"${{ secrets.SHOPWARE_PACKAGES_TOKEN }}"}}'
+                run: make ci-bootstrap
+            -   id: phpunit
+                continue-on-error: true
+                run: make ci-phpunit
+            -   id: e2e
+                continue-on-error: true
+                run: make ci-e2e
+            -   if: always()
+                uses: actions/upload-artifact@v4
+                with:
+                    name: junit-results
+                    path: |
+                        custom/**/build/junit-phpunit.xml
+                        tests/e2e/test-results/junit.xml
+                    if-no-files-found: ignore
+            -   if: always()
+                uses: actions/upload-artifact@v4
+                with:
+                    name: playwright-reports
+                    path: |
+                        tests/e2e/playwright-report
+                        tests/e2e/test-results
+                    if-no-files-found: ignore
+            -   if: failure()
+                run: make ci-teardown WITH_LOGS=1
+            -   if: success() || cancelled()
+                run: make ci-teardown
+            -   name: Gate
+                if: always()
+                env:
+                    PHPUNIT: ${{ steps.phpunit.outcome }}
+                    E2E: ${{ steps.e2e.outcome }}
+                run: |
+                    failed=0
+                    for o in "$PHPUNIT" "$E2E"; do
+                        [ "$o" = "failure" ] && failed=1
+                    done
+                    if [ "$failed" = 1 ]; then
+                        echo "::error::At least one test suite failed."
+                        exit 1
+                    fi
+
+    # -----------------------------------------------------------------
+    # Publish results — renders the JUnit XML uploaded by `tests` as
+    # GitHub Checks via dorny/test-reporter, and writes a summary block
+    # into the PR body so reviewers don't need to dig into job logs.
+    #
+    # Runs whether `tests` passed or failed (`if: always()` + result check)
+    # so failure runs still get the report. The job itself is reporting-only
+    # and never blocks the build — `tests` is the real gate.
+    # -----------------------------------------------------------------
+    publish-results:
+        name: Publish Test Results
+        needs: [tests]
+        if: always() && (needs.tests.result == 'success' || needs.tests.result == 'failure')
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+            checks: write
+            pull-requests: write
+        steps:
+            -   uses: actions/checkout@v4
+
+            -   name: Download JUnit results
+                uses: actions/download-artifact@v4
+                with:
+                    name: junit-results
+                    path: junit-results
+
+            -   id: phpunit-report
+                name: Publish PHPUnit report
+                if: always()
+                uses: dorny/test-reporter@v1
+                with:
+                    name: PHPUnit
+                    # Glob: pick up every plugin's JUnit, no hardcoded list.
+                    path: 'junit-results/**/junit-phpunit.xml'
+                    reporter: java-junit
+                    list-tests: failed
+                    list-suites: all
+                    fail-on-error: false
+                    fail-on-empty: false
+
+            -   id: e2e-report
+                name: Publish Playwright report
+                if: always()
+                uses: dorny/test-reporter@v1
+                with:
+                    name: Playwright
+                    path: 'junit-results/**/test-results/junit.xml'
+                    reporter: java-junit
+                    list-tests: failed
+                    list-suites: all
+                    fail-on-error: false
+                    fail-on-empty: false
+
+            -   name: Update PR description with test results
+                if: ${{ github.event_name == 'pull_request' }}
+                uses: actions/github-script@v7
+                env:
+                    PHPUNIT_REPORT_URL: ${{ steps.phpunit-report.outputs.url_html }}
+                    E2E_REPORT_URL:     ${{ steps.e2e-report.outputs.url_html }}
+                with:
+                    github-token: ${{ secrets.GITHUB_TOKEN }}
+                    script: |
+                        const fs = require('fs');
+                        const path = require('path');
+
+                        // Walk junit-results/ to discover every JUnit file —
+                        // we auto-discover plugin tests, so the count varies
+                        // per PR.
+                        function walk(dir, acc = []) {
+                            if (!fs.existsSync(dir)) return acc;
+                            for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+                                const p = path.join(dir, entry.name);
+                                if (entry.isDirectory()) walk(p, acc);
+                                else if (entry.isFile() && /\.xml$/.test(entry.name)) acc.push(p);
+                            }
+                            return acc;
+                        }
+
+                        // Aggregate the suite counts across N JUnit files for
+                        // a category. UGG used one file per category; we glob.
+                        function aggregate(files) {
+                            let tests = 0, failures = 0, skipped = 0, suites = 0, time = 0;
+                            for (const file of files) {
+                                if (!fs.existsSync(file)) continue;
+                                const xml = fs.readFileSync(file, 'utf8');
+                                tests    += (xml.match(/<testcase[\s>]/g) || []).length;
+                                failures += (xml.match(/<failure[\s>]/g) || []).length
+                                          + (xml.match(/<error[\s>]/g)   || []).length;
+                                skipped  += (xml.match(/<skipped[\s>/]/g) || []).length;
+                                for (const m of xml.matchAll(/<testsuite[^>]*>/g)) {
+                                    const t  = m[0].match(/\btests="([1-9]\d*)"/);
+                                    if (t) suites++;
+                                    const tm = m[0].match(/\btime="([^"]+)"/);
+                                    if (tm) time += parseFloat(tm[1]);
+                                }
+                            }
+                            return tests > 0 ? { tests, failures, skipped, suites, time } : null;
+                        }
+
+                        function formatTime(seconds) {
+                            if (seconds < 1)  return `${Math.round(seconds * 1000)}ms`;
+                            if (seconds < 60) return `${Math.round(seconds)}s`;
+                            return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
+                        }
+
+                        const all = walk('junit-results');
+                        const phpunitFiles    = all.filter(p => /junit-phpunit\.xml$/.test(p));
+                        const playwrightFiles = all.filter(p => /test-results\/junit\.xml$/.test(p));
+
+                        const types = [
+                            { label: 'PHPUnit',    files: phpunitFiles,    urlEnv: 'PHPUNIT_REPORT_URL' },
+                            { label: 'Playwright', files: playwrightFiles, urlEnv: 'E2E_REPORT_URL' },
+                        ];
+
+                        const sections = [];
+                        for (const t of types) {
+                            const r = aggregate(t.files);
+                            const url = process.env[t.urlEnv] || '';
+                            const reportLink = url ? ` ([report](${url}))` : '';
+                            if (!r) {
+                                sections.push(`⚪ **${t.label}**${reportLink}\n no results`);
+                                continue;
+                            }
+                            const status = r.failures > 0 ? '❌' : '✅';
+                            const passed = r.tests - r.failures - r.skipped;
+                            sections.push([
+                                `${status} **${t.label}**${reportLink}`,
+                                ` ${r.suites} suites   ${formatTime(r.time)} ⏱️`,
+                                ` ${r.tests} tests   ${passed} ✅   ${r.skipped} 💤   ${r.failures} ❌`,
+                            ].join('\n'));
+                        }
+
+                        const start = '<!-- test-results:start -->';
+                        const end   = '<!-- test-results:end -->';
+                        const block = `${start}\n\n---\n\n### 🧪 Test results\n\n${sections.join('\n\n')}\n\n${end}`;
+
+                        const { owner, repo } = context.repo;
+                        const prNumber = context.payload.pull_request.number;
+                        const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: prNumber });
+                        let body = pr.body || '';
+                        if (body.includes(start) && body.includes(end)) {
+                            body = body.replace(new RegExp(`${start}[\\s\\S]*?${end}`), block);
+                        } else {
+                            body = `${body.trimEnd()}\n\n${block}\n`;
+                        }
+                        await github.rest.pulls.update({ owner, repo, pull_number: prNumber, body });
+
+    # -----------------------------------------------------------------
+    # Final aggregate status. Branch protection should mark THIS as the
+    # required check — that way adding a new job upstream doesn't require
+    # updating branch-protection rules. `publish-results` is reporting-only,
+    # so we don't let its failure fail the pipeline.
+    # -----------------------------------------------------------------
+    ci-passed:
+        name: CI
+        needs: [config, quality, lint, audit, shopware-validate, secrets-scan, tests, publish-results, image]
+        if: always()
+        runs-on: ubuntu-latest
+        steps:
+            -   name: Gate
+                env:
+                    CONFIG:           ${{ needs.config.result }}
+                    QUALITY:          ${{ needs.quality.result }}
+                    LINT:             ${{ needs.lint.result }}
+                    AUDIT:            ${{ needs.audit.result }}
+                    SHOPWARE_VALIDATE: ${{ needs.shopware-validate.result }}
+                    SECRETS_SCAN:     ${{ needs.secrets-scan.result }}
+                    TESTS:            ${{ needs.tests.result }}
+                    PUBLISH:          ${{ needs.publish-results.result }}
+                    IMAGE:            ${{ needs.image.result }}
+                run: |
+                    echo "config:             $CONFIG"
+                    echo "quality:            $QUALITY"
+                    echo "lint:               $LINT"
+                    echo "audit:              $AUDIT"
+                    echo "shopware-validate:  $SHOPWARE_VALIDATE"
+                    echo "secrets-scan:       $SECRETS_SCAN"
+                    echo "tests:              $TESTS"
+                    echo "publish-results:    $PUBLISH (reporting-only)"
+                    echo "image:              $IMAGE"
+
+                    blocking="$CONFIG $QUALITY $LINT $AUDIT $SHOPWARE_VALIDATE $SECRETS_SCAN $TESTS $IMAGE"
+                    for r in $blocking; do
+                        if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then
+                            echo "::error::CI failed — see job outputs above."
+                            exit 1
+                        fi
+                    done
+                    if [ "$PUBLISH" = "failure" ]; then
+                        echo "::warning::publish-results failed — reports/PR comment may be missing."
+                    fi
+                    echo "✅ CI passed."
+
+    # -----------------------------------------------------------------
+    # Container image build — runs in parallel with tests once the fast
+    # static checks pass. Pushes to GHCR on main.
+    # -----------------------------------------------------------------
+    image:
+        name: Build & Push Image
+        needs: [config, quality, lint, shopware-validate]
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+            packages: write
+        env:
+            PHP_VERSION:      ${{ needs.config.outputs.php_version }}
+            NODE_VERSION:     ${{ needs.config.outputs.node_version }}
+            IMAGE_APP:        ${{ needs.config.outputs.image_app }}
+            IMAGE_WORKER:     ${{ needs.config.outputs.image_worker }}
+            TIDEWAYS_ENABLE:  ${{ needs.config.outputs.tideways_enable }}
+            TIDEWAYS_VERSION: ${{ needs.config.outputs.tideways_version }}
+        steps:
+            -   uses: actions/checkout@v4
+            -   uses: docker/setup-buildx-action@v3
+            -   uses: docker/login-action@v3
+                if: github.event_name != 'pull_request'
+                with:
+                    registry: ghcr.io
+                    username: ${{ github.actor }}
+                    password: ${{ secrets.GITHUB_TOKEN }}
+            -   uses: docker/metadata-action@v5
+                id: meta
+                with:
+                    images: ghcr.io/${{ github.repository }}/shopware
+                    tags: |
+                        type=ref,event=branch
+                        type=sha,prefix=,format=short
+                        type=raw,value=latest,enable={{is_default_branch}}
+            -   uses: docker/build-push-action@v6
+                with:
+                    context: .
+                    file: docker/Dockerfile
+                    target: app
+                    push: ${{ github.event_name != 'pull_request' }}
+                    cache-from: type=gha
+                    cache-to: type=gha,mode=max
+                    tags: ${{ steps.meta.outputs.tags }}
+                    labels: ${{ steps.meta.outputs.labels }}
+                    build-args: |
+                        APP_VERSION=${{ github.sha }}
+                        COMPOSER_AUTH={"github-oauth":{"github.com":"${{ secrets.COMPOSER_AUTH_TOKEN }}"},"bearer":{"packages.shopware.com":"${{ secrets.SHOPWARE_PACKAGES_TOKEN }}"}}
+            -   uses: docker/build-push-action@v6
+                with:
+                    context: .
+                    file: docker/Dockerfile
+                    target: worker
+                    push: ${{ github.event_name != 'pull_request' }}
+                    cache-from: type=gha
+                    tags: ghcr.io/${{ github.repository }}/shopware-worker:${{ github.sha }}
+                    build-args: |
+                        APP_VERSION=${{ github.sha }}
+                        COMPOSER_AUTH={"github-oauth":{"github.com":"${{ secrets.COMPOSER_AUTH_TOKEN }}"},"bearer":{"packages.shopware.com":"${{ secrets.SHOPWARE_PACKAGES_TOKEN }}"}}
+
+            # Backup image — thin Alpine layer with mariadb-client + openssl
+            # + aws-cli. Used by k8s/base/cronjob-backup.yaml. Rebuilt on
+            # every CI run because it's cheap; the registry dedups by digest.
+            -   uses: docker/build-push-action@v6
+                with:
+                    context: docker/backup
+                    file: docker/backup/Dockerfile
+                    push: ${{ github.event_name != 'pull_request' }}
+                    cache-from: type=gha
+                    tags: |
+                        ghcr.io/${{ github.repository }}/shopware-backup:${{ github.sha }}
+                        ghcr.io/${{ github.repository }}/shopware-backup:latest
+
+            # ----- Vulnerability scan ----------------------------------
+            # Trivy scans the freshly-built `app` image for CVEs. HIGH +
+            # CRITICAL fail the build; project-specific accepted findings
+            # are listed in .trivyignore at the repo root.
+            #
+            # We re-build the image locally (load=true, push=false) so the
+            # scan sees the exact same layers we just pushed — without
+            # round-tripping through the registry.
+            -   uses: docker/build-push-action@v6
+                id: build-local
+                with:
+                    context: .
+                    file: docker/Dockerfile
+                    target: app
+                    load: true
+                    push: false
+                    cache-from: type=gha
+                    tags: shopware-app:scan
+                    build-args: |
+                        APP_VERSION=${{ github.sha }}
+                        COMPOSER_AUTH={"github-oauth":{"github.com":"${{ secrets.COMPOSER_AUTH_TOKEN }}"},"bearer":{"packages.shopware.com":"${{ secrets.SHOPWARE_PACKAGES_TOKEN }}"}}
+
+            -   name: Trivy scan (HIGH+CRITICAL block, others reported)
+                uses: aquasecurity/trivy-action@0.28.0
+                with:
+                    image-ref: shopware-app:scan
+                    format: table
+                    exit-code: '1'
+                    severity: HIGH,CRITICAL
+                    ignore-unfixed: true
+                    trivyignores: .trivyignore
+                    cache: 'true'
+
+            -   name: Trivy SBOM (informational, uploaded as artefact)
+                if: always()
+                uses: aquasecurity/trivy-action@0.28.0
+                with:
+                    image-ref: shopware-app:scan
+                    format: cyclonedx
+                    output: trivy-sbom.cdx.json
+
+            -   name: Upload SBOM
+                if: always()
+                uses: actions/upload-artifact@v4
+                with:
+                    name: sbom-${{ github.sha }}
+                    path: trivy-sbom.cdx.json
+                    if-no-files-found: ignore

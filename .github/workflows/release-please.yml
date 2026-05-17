@@ -1,0 +1,58 @@
+name: release-please
+
+# Watches commits to main, keeps an open "chore: release X.Y.Z" PR that:
+#   • bumps the version manifest
+#   • collects every conventional-commit subject since the last tag into
+#     CHANGELOG.md
+#   • on merge: creates a git tag (vX.Y.Z) + GitHub Release
+#
+# The tag is then the natural REVISION for bare-metal Deployer runs:
+#   make deploy ENV=production REVISION=v1.4.2
+#
+# Why this is worth having for a shop project:
+#   • Bare-metal releases land in /var/www/shopware/releases/<stamp>-<sha> —
+#     SHAs are unreadable in oncall logs; tags are not.
+#   • Rollback conversations become "roll back to v1.4.1" instead of
+#     "roll back to 7af3b2c".
+#   • CHANGELOG.md is the artefact CS / product management actually reads.
+#   • The commit-msg hook in .githooks/ already nudges devs toward the
+#     conventional-commits shape release-please needs.
+#
+# To disable: delete this workflow + release-please-config.json + the
+# manifest. Nothing else in the template depends on it.
+
+on:
+    push:
+        branches: [main]
+
+permissions:
+    contents: write
+    pull-requests: write
+
+jobs:
+    release-please:
+        runs-on: ubuntu-latest
+        steps:
+            -   uses: googleapis/release-please-action@v4
+                id: release
+                with:
+                    config-file: .github/release-please-config.json
+                    manifest-file: .release-please-manifest.json
+
+            # When release-please merges the release PR, it cuts a tag.
+            # The next step kicks off the deploy workflow against staging
+            # automatically — production stays manual on purpose.
+            -   if: ${{ steps.release.outputs.release_created }}
+                uses: actions/github-script@v7
+                with:
+                    github-token: ${{ secrets.GITHUB_TOKEN }}
+                    script: |
+                        const tag = '${{ steps.release.outputs.tag_name }}';
+                        await github.rest.actions.createWorkflowDispatch({
+                            owner: context.repo.owner,
+                            repo: context.repo.repo,
+                            workflow_id: 'deploy.yml',
+                            ref: tag,
+                            inputs: { environment: 'staging', image_tag: tag },
+                        });
+                        core.notice(`Auto-triggered staging deploy for ${tag}`);

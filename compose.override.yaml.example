@@ -1,0 +1,47 @@
+# Optional local override — Compose merges this file on top of compose.yaml
+# automatically when it's named compose.override.yaml (no `.example` suffix).
+#
+# Use this once you've outgrown "just use Dockware's pre-installed Shopware"
+# and want to customise the framework skeleton (your own public/index.php,
+# src/Kernel.php, full config/, plugin-overridden composer.json).
+#
+# Setup:
+#   1. `make scaffold-shop` — extracts Dockware's pre-installed framework
+#      files (public/, src/, config/, composer.json, …) onto the host so
+#      you have something to edit instead of empty directories
+#   2. `cp compose.override.yaml.example compose.override.yaml`
+#   3. `docker compose down && make up` — bind mounts are now active
+#
+# Bind-mounting these paths over Dockware's pre-installed Shopware is what
+# the *original* compose.yaml did, but only works AFTER scaffold-shop has
+# populated them — otherwise empty host directories silently overwrite
+# Dockware's framework and you get 403 / "no extension for shopware"
+# errors.
+
+services:
+    app:
+        volumes:
+            # Framework-level overrides. NEVER enable any of these without
+            # populating the host path first (via scaffold-shop, your own
+            # shopware-cli create, or by copying from an existing project).
+            - ./public:/var/www/html/public
+            - ./src:/var/www/html/src
+            - ./config:/var/www/html/config
+            - ./composer.json:/var/www/html/composer.json
+            - ./composer.lock:/var/www/html/composer.lock
+            # Vendor in a named volume so iterating doesn't take ages on
+            # macOS bind-mount slowness. Wipe with:
+            #   docker volume rm shopware-shop_app_vendor
+            - app_vendor:/var/www/html/vendor
+
+    worker:
+        volumes:
+            - ./public:/var/www/html/public
+            - ./src:/var/www/html/src
+            - ./config:/var/www/html/config
+            - ./composer.json:/var/www/html/composer.json
+            - ./composer.lock:/var/www/html/composer.lock
+            - app_vendor:/var/www/html/vendor
+
+volumes:
+    app_vendor:

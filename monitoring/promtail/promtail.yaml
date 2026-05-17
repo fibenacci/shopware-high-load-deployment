@@ -1,0 +1,41 @@
+server:
+    http_listen_port: 9080
+    grpc_listen_port: 0
+    log_level: info
+
+positions:
+    filename: /tmp/positions.yaml
+
+clients:
+    - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+    - job_name: docker
+      docker_sd_configs:
+          - host: unix:///var/run/docker.sock
+            refresh_interval: 5s
+      relabel_configs:
+          - source_labels: ["__meta_docker_container_name"]
+            regex: "/(.*)"
+            target_label: container
+          - source_labels: ["__meta_docker_container_label_com_docker_compose_service"]
+            target_label: service
+          - source_labels: ["__meta_docker_container_label_com_docker_compose_project"]
+            target_label: stack
+      pipeline_stages:
+          # Best-effort JSON parse — nginx writes JSON access logs (see
+          # docker/nginx/nginx.conf), php-fpm writes plain stderr. The
+          # `match` stage skips JSON parsing for non-nginx containers so the
+          # raw line is preserved.
+          - match:
+                selector: '{container=~".*nginx.*|.*app.*"}'
+                stages:
+                    - json:
+                          expressions:
+                              status: status
+                              method: method
+                              path: path
+                              req_time: req_time
+                    - labels:
+                          status:
+                          method:

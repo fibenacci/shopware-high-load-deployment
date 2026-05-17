@@ -1,0 +1,39 @@
+# Local ingress — routes every *.<PROJECT_DOMAIN> hostname to the right
+# service. The PROJECT_DOMAIN placeholder is expanded at container start by
+# nginx's envsubst command in compose.yaml.
+
+server {
+    listen 80 default_server;
+    server_name _;
+    return 404;
+}
+
+# Adminer (served by the app container at /adminer.php)
+server {
+    listen 80;
+    server_name adminer.${PROJECT_DOMAIN};
+    location = / { return 302 http://$host/adminer.php; }
+    location / {
+        proxy_pass http://app:80;
+        proxy_set_header Host ${PROJECT_DOMAIN};
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+
+# Storefront / sales channels
+server {
+    listen 80;
+    server_name ${PROJECT_DOMAIN} *.${PROJECT_DOMAIN};
+    client_max_body_size 64m;
+    location / {
+        proxy_pass http://app:80;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}

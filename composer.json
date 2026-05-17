@@ -1,0 +1,88 @@
+{
+
+    "name": "example/shopware-shop",
+    "description": "Shopware 6 shop based on the shopware-shop-deployment template.",
+    "type": "project",
+    "license": "proprietary",
+    "config": {
+        "allow-plugins": {
+            "composer/package-versions-deprecated": true,
+            "symfony/flex": true,
+            "symfony/runtime": true
+        },
+        "optimize-autoloader": true,
+        "preferred-install": { "*": "dist" },
+        "sort-packages": true
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true,
+    "autoload": {
+        "psr-4": {
+            "Shopware\\Production\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Shopware\\Production\\Tests\\": "tests/"
+        }
+    },
+    "repositories": [
+        {
+            "type": "path",
+            "url": "custom/plugins/*",
+            "options": { "symlink": true }
+        },
+        {
+            "type": "path",
+            "url": "custom/static-plugins/*",
+            "options": { "symlink": true }
+        }
+    ],
+    "extra": {
+        "symfony": {
+            "endpoint": [
+                "https://raw.githubusercontent.com/shopware/recipes/flex/main/index.json",
+                "flex://defaults"
+            ],
+            "require": "~6.6"
+        }
+    },
+    "require": {
+        "php": "~8.3.0",
+        "composer-runtime-api": "^2.0",
+        "shopware/administration": "6.6.5.1",
+        "shopware/core": "6.6.5.1",
+        "shopware/elasticsearch": "6.6.5.1",
+        "shopware/storefront": "6.6.5.1",
+
+        "shopware/deployment-helper": "^1.0",
+
+        "shopware/docker": "^1.0",
+
+        "league/flysystem-async-aws-s3": "^3.0",
+
+        "open-telemetry/opentelemetry-auto-symfony": "^1.0",
+        "open-telemetry/sdk": "^1.0",
+        "open-telemetry/exporter-otlp": "^1.0",
+        "grafana/pyroscope-php": "^1.0"
+    },
+    "require-dev": {
+        "deployer/deployer": "^7.5",
+
+        "phpunit/phpunit": "^10.0",
+        "phpstan/phpstan": "^1.10",
+        "phpstan/phpstan-symfony": "^1.4",
+        "phpstan/phpstan-phpunit": "^1.3",
+        "friendsofphp/php-cs-fixer": "^3.50",
+        "squizlabs/php_codesniffer": "^3.10",
+        "phpmd/phpmd": "^2.15"
+    },
+    "scripts": {
+        "auto-scripts": {
+            "assets:install %PUBLIC_DIR%": "symfony-cmd",
+            "cache:clear": "symfony-cmd"
+        },
+        "post-install-cmd": ["@auto-scripts"],
+        "post-update-cmd": ["@auto-scripts"]
+    }
+}
