@@ -555,7 +555,7 @@ jobs:
                         COMPOSER_AUTH={"github-oauth":{"github.com":"${{ secrets.COMPOSER_AUTH_TOKEN }}"},"bearer":{"packages.shopware.com":"${{ secrets.SHOPWARE_PACKAGES_TOKEN }}"}}
 
             -   name: Trivy scan (HIGH+CRITICAL block, others reported)
-                uses: aquasecurity/trivy-action@0.28.0
+                uses: aquasecurity/trivy-action@v0.36.0
                 with:
                     image-ref: shopware-app:scan
                     format: table
@@ -567,7 +567,7 @@ jobs:
 
             -   name: Trivy SBOM (informational, uploaded as artefact)
                 if: always()
-                uses: aquasecurity/trivy-action@0.28.0
+                uses: aquasecurity/trivy-action@v0.36.0
                 with:
                     image-ref: shopware-app:scan
                     format: cyclonedx
