@@ -8,9 +8,9 @@ commonAnnotations:
 
 resources:
     - ../../base
+    - namespace.yaml
 
 patches:
-    - path: patch-namespace.yaml
     - path: patch-replicas.yaml
     - path: patch-ingress.yaml
     - path: patch-resources.yaml

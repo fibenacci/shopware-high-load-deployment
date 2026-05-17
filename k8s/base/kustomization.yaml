@@ -3,15 +3,22 @@ kind: Kustomization
 
 # Base manifests — shared across every environment. Overlays patch image
 # tags, resource budgets, replica counts, hostnames, and ingress class.
+#
+# The Namespace itself is defined per-overlay (overlays/<env>/namespace.yaml)
+# because kustomize's `namespace:` directive cannot rename a Namespace
+# resource — it only sets `.metadata.namespace` on namespaced resources.
+# Keeping the Namespace at overlay scope also lets each env carry its own
+# pod-security labels without strategic-merge patching.
 
 namespace: shopware
 
-commonLabels:
-    app.kubernetes.io/part-of: shopware
-    app.kubernetes.io/managed-by: kustomize
+labels:
+    -   pairs:
+            app.kubernetes.io/part-of: shopware
+            app.kubernetes.io/managed-by: kustomize
+        includeSelectors: true
 
 resources:
-    - namespace.yaml
     - configmap.yaml
     - secret.yaml
     - service-web.yaml

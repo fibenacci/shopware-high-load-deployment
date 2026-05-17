@@ -9,10 +9,10 @@ commonAnnotations:
 
 resources:
     - ../../base
+    - namespace.yaml
 
 # Stage-specific patches.
 patches:
-    - path: patch-namespace.yaml
     - path: patch-replicas.yaml
     - path: patch-ingress.yaml
 

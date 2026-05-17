@@ -75,11 +75,7 @@ fi
 section "JSON parse"
 
 json_count=0; json_bad=0
-for f in $(find . -type f -name '*.json' \
-    -not -path './vendor/*' \
-    -not -path './node_modules/*' \
-    -not -path '*/.git/*' \
-    -not -path '*/.idea/*' 2>/dev/null); do
+while IFS= read -r f; do
     json_count=$((json_count + 1))
     if have jq; then
         jq empty "$f" >/dev/null 2>&1 || { fail "${f} — invalid JSON"; json_bad=$((json_bad + 1)); }
@@ -87,7 +83,11 @@ for f in $(find . -type f -name '*.json' \
         python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$f" >/dev/null 2>&1 \
             || { fail "${f} — invalid JSON"; json_bad=$((json_bad + 1)); }
     fi
-done
+done < <(find . -type f -name '*.json' \
+    -not -path './vendor/*' \
+    -not -path './node_modules/*' \
+    -not -path '*/.git/*' \
+    -not -path '*/.idea/*' 2>/dev/null)
 if [ "${json_count}" -gt 0 ] && [ "${json_bad}" -eq 0 ]; then
     ok "${json_count} JSON files parsed"
 elif [ "${json_count}" -eq 0 ]; then
@@ -116,17 +116,20 @@ fi
 section "Shell scripts"
 
 if have shellcheck; then
+    # -S warning suppresses INFO-level chatter (SC2029/2031/2153/2317/2016/etc).
+    # SC1091 silences "can't follow source"; we use directives where needed.
+    SHELLCHECK_OPTS=(-x -e SC1091 -S warning)
     sh_count=0; sh_bad=0
     while IFS= read -r f; do
         sh_count=$((sh_count + 1))
-        shellcheck -x -e SC1091 "$f" >/dev/null 2>&1 \
+        shellcheck "${SHELLCHECK_OPTS[@]}" "$f" >/dev/null 2>&1 \
             || { fail "${f} — shellcheck issues"; sh_bad=$((sh_bad + 1)); }
     done < <(find . -type f -name '*.sh' \
         -not -path './vendor/*' -not -path './node_modules/*' \
         -not -path '*/.git/*' 2>/dev/null)
     while IFS= read -r f; do
         sh_count=$((sh_count + 1))
-        shellcheck -x -e SC1091 "$f" >/dev/null 2>&1 \
+        shellcheck "${SHELLCHECK_OPTS[@]}" "$f" >/dev/null 2>&1 \
             || { fail "${f} — shellcheck issues"; sh_bad=$((sh_bad + 1)); }
     done < <(find .githooks -type f 2>/dev/null)
     [ "${sh_count}" -gt 0 ] && [ "${sh_bad}" -eq 0 ] && ok "${sh_count} shell scripts clean"
@@ -179,8 +182,12 @@ else
     skip "kustomize" "not installed — brew install kustomize"
 fi
 
-# Client-side schema validation if kubectl is available
-if have kubectl; then
+# Client-side schema validation, but only when the cluster's REST mapper
+# knows the CRDs we reference (ServiceMonitor from prometheus-operator).
+# A template repo typically runs without a cluster context — skipping the
+# check there is correct. CI installs the CRDs (or points at a cluster
+# that already has them) to opt in.
+if have kubectl && kubectl api-resources --api-group=monitoring.coreos.com 2>/dev/null | grep -q ServiceMonitor; then
     for overlay in k8s/overlays/staging k8s/overlays/production; do
         [ -d "${overlay}" ] || continue
         if kubectl apply -k "${overlay}" --dry-run=client -o yaml >/dev/null 2>&1; then
@@ -189,6 +196,8 @@ if have kubectl; then
             fail "kubectl apply --dry-run=client -k ${overlay} — schema errors"
         fi
     done
+elif have kubectl; then
+    skip "kubectl apply --dry-run" "Prometheus CRDs not in cluster — install monitoring/k8s/* first"
 fi
 
 # ---------------------------------------------------------------------------
@@ -217,10 +226,13 @@ section "Renovate config"
 
 if [ -f .github/renovate.json ]; then
     if have npx; then
-        if npx --yes --quiet renovate-config-validator .github/renovate.json >/dev/null 2>&1; then
+        # `renovate-config-validator` is a binary INSIDE the `renovate` package
+        # (no standalone package exists). --package selects the right registry
+        # entry; we run the binary by name after the bare `--`.
+        if npx --yes --quiet --package renovate -- renovate-config-validator .github/renovate.json >/dev/null 2>&1; then
             ok ".github/renovate.json validates"
         else
-            warn "renovate-config-validator reports issues — run 'npx renovate-config-validator .github/renovate.json' for detail"
+            warn "renovate-config-validator reports issues — run 'npx --package renovate -- renovate-config-validator .github/renovate.json' for detail"
         fi
     else
         skip "renovate-config-validator" "needs npx (node)"

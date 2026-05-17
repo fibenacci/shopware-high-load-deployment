@@ -84,6 +84,8 @@ fi
 # Pull new image — happens BEFORE the rollout so we can fail fast.
 # ---------------------------------------------------------------------------
 step "Pulling image tag: ${IMAGE_TAG}"
+# Intentional client-side expansion of ${REMOTE_DIR}/${IMAGE_TAG}/${ENV}.
+# shellcheck disable=SC2087
 ssh "${SSH_OPTS[@]}" "${TARGET}" bash -s <<EOF
     set -euo pipefail
     cd '${REMOTE_DIR}'
@@ -97,6 +99,8 @@ success "Image pulled"
 # One-shot migration container BEFORE web restart.
 # ---------------------------------------------------------------------------
 step "Running shopware-deployment-helper (migrations + plugins + theme)"
+# Intentional client-side expansion of ${REMOTE_DIR}/${IMAGE_TAG}/${ENV}.
+# shellcheck disable=SC2087
 ssh "${SSH_OPTS[@]}" "${TARGET}" bash -s <<EOF
     set -euo pipefail
     cd '${REMOTE_DIR}'
@@ -114,6 +118,8 @@ success "Migrations done"
 # the new container starts (healthcheck-gated by depends_on).
 # ---------------------------------------------------------------------------
 step "Rolling restart"
+# Intentional client-side expansion of ${REMOTE_DIR}/${IMAGE_TAG}/${ENV}.
+# shellcheck disable=SC2087
 ssh "${SSH_OPTS[@]}" "${TARGET}" bash -s <<EOF
     set -euo pipefail
     cd '${REMOTE_DIR}'
@@ -150,6 +156,8 @@ fi
 # ---------------------------------------------------------------------------
 # Record last-good tag for rollback.
 # ---------------------------------------------------------------------------
+# Intentional client-side expansion of ${ENV}/${IMAGE_TAG}.
+# shellcheck disable=SC2087
 ssh "${SSH_OPTS[@]}" "${TARGET}" bash -s <<EOF
     set -euo pipefail
     mkdir -p "\${HOME:-/root}/.shopware-deploy/${ENV}"

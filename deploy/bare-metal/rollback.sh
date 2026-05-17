@@ -43,6 +43,8 @@ ssh "${SSH_OPTS[@]}" "${TARGET}" \
 
 printf "\033[1;33m▶\033[0m Rolling %s back to release: %s\n" "${ENV}" "${TARGET_RELEASE}"
 
+# Intentional client-side expansion of ${REMOTE_PATH}/${TARGET_RELEASE}.
+# shellcheck disable=SC2087
 ssh "${SSH_OPTS[@]}" "${TARGET}" bash -s <<EOF
     set -euo pipefail
     cd '${REMOTE_PATH}'

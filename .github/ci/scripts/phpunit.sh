@@ -7,7 +7,7 @@
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-cd "${REPO_ROOT}"
+cd "${REPO_ROOT}" || exit 1
 
 # Discover every plugin that ships a phpunit config. No hardcoded list —
 # adding a plugin is a `git add` away from CI coverage.

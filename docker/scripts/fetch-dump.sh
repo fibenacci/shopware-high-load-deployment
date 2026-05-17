@@ -89,8 +89,10 @@ load_profile() {
         fail "PROFILE=${PROFILE} given but ${PROFILE_FILE} missing — copy ${PROFILE_FILE}.example first."
     fi
 
-    # shellcheck disable=SC1090
-    set -a; . "./${PROFILE_FILE}"; set +a
+    set -a
+    # shellcheck source=/dev/null
+    . "./${PROFILE_FILE}"
+    set +a
 
     local up
     up="$(printf "%s" "${PROFILE}" | tr '[:lower:]-' '[:upper:]_')"

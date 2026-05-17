@@ -29,7 +29,7 @@ apply_domains() {
 }
 
 step "Waiting for MariaDB"
-for i in $(seq 1 30); do
+for _ in $(seq 1 30); do
     if mysql -hmariadb -uroot -p"${MYSQL_ROOT_PASSWORD:-root}" -e "SELECT 1" >/dev/null 2>&1; then
         success "MariaDB ready"; break
     fi

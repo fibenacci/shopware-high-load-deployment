@@ -136,6 +136,9 @@ success "Release uploaded"
 # ---------------------------------------------------------------------------
 step "Link shared paths into release"
 
+# Heredoc is intentionally unquoted: ${REMOTE_PATH}, ${STAMP}, ${SHARED_DIRS}
+# expand on the CLIENT before being sent to the remote shell.
+# shellcheck disable=SC2087
 ssh "${SSH_OPTS[@]}" "${TARGET}" bash -s <<EOF
     set -euo pipefail
     cd '${REMOTE_PATH}/releases/${STAMP}'
@@ -161,6 +164,8 @@ success "Shared paths linked"
 # ---------------------------------------------------------------------------
 if [ "${SKIP_DEPLOYMENT_HELPER:-0}" != "1" ]; then
     step "shopware-deployment-helper run"
+    # Intentional client-side expansion of ${REMOTE_PATH}/${STAMP}/${REMOTE_PHP_BIN}.
+    # shellcheck disable=SC2087
     ssh "${SSH_OPTS[@]}" "${TARGET}" bash -s <<EOF
         set -euo pipefail
         cd '${REMOTE_PATH}/releases/${STAMP}'
@@ -185,6 +190,8 @@ fi
 # ---------------------------------------------------------------------------
 step "Atomic symlink swap"
 
+# Intentional client-side expansion of ${REMOTE_PATH}/${STAMP}.
+# shellcheck disable=SC2087
 ssh "${SSH_OPTS[@]}" "${TARGET}" bash -s <<EOF
     set -euo pipefail
     cd '${REMOTE_PATH}'
@@ -233,6 +240,8 @@ fi
 # ---------------------------------------------------------------------------
 step "Prune old releases (keep ${RELEASES_TO_KEEP:-5})"
 
+# Intentional client-side expansion of ${REMOTE_PATH}/${RELEASES_TO_KEEP}.
+# shellcheck disable=SC2087
 ssh "${SSH_OPTS[@]}" "${TARGET}" bash -s <<EOF
     set -euo pipefail
     cd '${REMOTE_PATH}/releases'

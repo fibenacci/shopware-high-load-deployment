@@ -19,6 +19,9 @@ SRC="${1:-}"
 [ -n "${DATABASE_URL:-}" ]      || { echo "DATABASE_URL required" >&2; exit 2; }
 [ -n "${BACKUP_PASSPHRASE:-}" ] || { echo "BACKUP_PASSPHRASE required" >&2; exit 2; }
 
+# DATABASE_URL is parsed via sed → eval; shellcheck can't track the eval-set
+# vars. Declare them so SC2154 doesn't fire.
+user=""; pass=""; host=""; port=""; db=""
 eval "$(echo "$DATABASE_URL" | \
     sed -nE 's|mysql://([^:]+):([^@]+)@([^:/]+):?([0-9]*)/([^?]+).*|user=\1 pass=\2 host=\3 port=\4 db=\5|p')"
 : "${port:=3306}"
