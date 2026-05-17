@@ -20,6 +20,15 @@ name: release-please
 #
 # To disable: delete this workflow + release-please-config.json + the
 # manifest. Nothing else in the template depends on it.
+#
+# ⚠ Required one-time repo setting (GitHub Actions can't grant itself
+# permission to open PRs even with `pull-requests: write` below). On the
+# repo:
+#     Settings → Actions → General → Workflow permissions
+#       ☑ Allow GitHub Actions to create and approve pull requests
+# Without this, the action creates the release branch successfully but
+# fails to open the PR with:
+#     "GitHub Actions is not permitted to create or approve pull requests"
 
 on:
     push:

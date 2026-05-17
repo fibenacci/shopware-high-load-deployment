@@ -71,10 +71,10 @@ if [ "${MODE}" = "check" ]; then
         echo "::error::${TARGET} missing — run 'make composer-json' to render it from ${TEMPLATE}"
         exit 2
     fi
-    if ! diff -u <(printf '%s' "${rendered}") "${TARGET}" >/dev/null 2>&1; then
+    if ! diff -u <(printf '%s\n' "${rendered}") "${TARGET}" >/dev/null 2>&1; then
         echo "::error::${TARGET} is out of sync with ${TEMPLATE} + deployment.config"
         echo ""
-        diff -u "${TARGET}" <(printf '%s' "${rendered}") | head -40 || true
+        diff -u "${TARGET}" <(printf '%s\n' "${rendered}") | head -40 || true
         echo ""
         echo "Fix: run 'make composer-json' and commit the result."
         exit 1
@@ -84,7 +84,7 @@ if [ "${MODE}" = "check" ]; then
 fi
 
 # Render mode — write only if changed.
-if [ -f "${TARGET}" ] && diff -q <(printf '%s' "${rendered}") "${TARGET}" >/dev/null 2>&1; then
+if [ -f "${TARGET}" ] && diff -q <(printf '%s\n' "${rendered}") "${TARGET}" >/dev/null 2>&1; then
     echo "✓ ${TARGET} already in sync (SHOPWARE=${SHOPWARE_VERSION}, PHP=${php_version})"
     exit 0
 fi

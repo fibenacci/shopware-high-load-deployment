@@ -103,6 +103,42 @@ If anything goes sideways, the pre-commit hook gives diagnostic output:
   See docs/signed-commits.md for full GPG / SSH setup.
 ```
 
+## Troubleshooting `bad_email` in CI
+
+If the `verify-signatures` workflow reports:
+
+```
+✗ <sha> — bad_email: <commit message>
+```
+
+The commit IS signed, but the email on the commit doesn't match a
+verified email on the signer's GitHub account. GitHub marks it
+"Unverified" even though the cryptographic signature is fine.
+
+Two-step fix:
+
+```bash
+# 1. Check what email you're committing with
+git config user.email
+
+# 2a. Set it to a verified-on-GitHub email
+git config user.email "you@your-verified-domain.com"
+
+# 2b. OR add the current email to your GitHub account
+#     Settings → Emails → Add email → verify via inbox
+```
+
+Then amend the existing commit so it carries the corrected identity,
+and force-push:
+
+```bash
+git commit --amend --no-edit --reset-author    # re-sign with current user.email
+git push --force-with-lease
+```
+
+`--force-with-lease` refuses the push if the remote branch moved —
+safer than plain `--force` if someone else might have pushed.
+
 ## Branch protection (one-time admin setup)
 
 GitHub-side, can't be configured from this repo:

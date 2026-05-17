@@ -71,6 +71,17 @@ Settings → Secrets and variables → Actions → Variables tab.
 | ---------------------------- | ---------------------------------------- | --------------------------------------- |
 | `SMOKE_TEST_URL`             | `deploy.yml` smoke-test step             | Public URL the post-deploy probe hits   |
 
+### One-time GitHub repo settings (not secrets, not variables)
+
+These can't be configured from the repo files — set them once in the
+GitHub UI per repository:
+
+| Setting | Path | Required for |
+| --- | --- | --- |
+| Allow GitHub Actions to create and approve pull requests | Settings → Actions → General → Workflow permissions | `release-please` workflow — otherwise the release PR can't be opened |
+| Require signed commits | Settings → Branches → Branch protection rules → main | Signed-commits policy (in addition to our `verify-signatures.yml` workflow) |
+| Require status checks: `CI` | Settings → Branches → Branch protection rules → main | Make `ci-passed` the single required check |
+
 ## What goes into `shopware-secrets` (Kubernetes)
 
 These are the keys the running pods expect via `envFrom: secretRef`. See
